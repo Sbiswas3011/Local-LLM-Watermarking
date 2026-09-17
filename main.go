@@ -4,39 +4,245 @@ package main
 #cgo CFLAGS: -IC:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/include -IC:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/ggml/include
 #cgo LDFLAGS: -L"C:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/build/src/Release" -lllama
 #include "llama.h"
+#include <stdlib.h>
+static void silent_log_callback(
+    enum ggml_log_level level,
+    const char * text,
+    void * user_data) {
+    (void) level;
+    (void) text;
+    (void) user_data;
+}
+static void disable_llama_logs(void) {
+    llama_log_set(silent_log_callback, NULL);
+}
 */
 import "C"
 
 import (
-	"errors"
+	"bufio"
 	"fmt"
+	"os"
+	"unsafe"
 )
 
-func main(){
+func main() {
 	fmt.Println("llama.cpp C API loaded")
 	fmt.Printf("llama.cpp version: %s\n", C.GoString(C.llama_version()))
 	modelPath := "C:/Users/JAYANTA/Desktop/gguf_store/Swift-Qwen3.8-27B-Q4_K_M.gguf"
 
-	runModel(modelPath)
+	initModel(modelPath)
 }
 
-func runModel(modelPath string) error{
+type promptData struct {
+	prompt string
+	vocab  *C.struct_llama_vocab
+	ctx    *C.struct_llama_context
+	smpl   *C.struct_llama_sampler
+	model  *C.struct_llama_model
+}
 
-	C.ggml_backend_load_all();
-	model_params := C.llama_model_default_params();
-    model_params.n_gpu_layers = C.int(99);
+func initModel(modelPath string) error {
+
+	// C.ggml_backend_load_all()
+	model_params := C.llama_model_default_params()
+	model_params.n_gpu_layers = C.int(99)
+
+	C.disable_llama_logs()
 
 	model := C.llama_model_load_from_file(C.CString(modelPath), model_params)
-	if(model == nil){
-		return errors.New("Model Not Found")
+	if model == nil {
+		return fmt.Errorf("Model Not Found")
 	}
+	defer C.llama_model_free(model)
 
 	vocab := C.llama_model_get_vocab(model)
 	ctx_params := C.llama_context_default_params()
+	ctx_params.n_ctx = 8192
 
 	ctx := C.llama_init_from_model(model, ctx_params)
-	if(ctx == nil){
-		return errors.New("Could not set context")
+	if ctx == nil {
+		return fmt.Errorf("Could not set context")
+	}
+	defer C.llama_free(ctx)
+
+	smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
+	if smpl == nil {
+		return fmt.Errorf("Could not set sampler")
+	}
+	defer C.llama_sampler_free(smpl)
+	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_greedy())
+
+	data := promptData{
+		prompt: "",
+		vocab:  vocab,
+		ctx:    ctx,
+		smpl:   smpl,
+		model:  model,
 	}
 
+	convo(data)
+
+	return nil
+}
+
+func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_context, smpl *C.struct_llama_sampler) (string, error) {
+	cPrompt := C.CString(prompt)
+	defer C.free(unsafe.Pointer(cPrompt))
+
+	response := ""
+
+	nPromptTokens := -C.llama_tokenize(vocab, cPrompt, C.int32_t(len(prompt)), nil, 0, true, true)
+
+	promptTokens := make([]C.llama_token, nPromptTokens)
+
+	var tokenPtr *C.llama_token
+	if len(promptTokens) > 0 {
+		tokenPtr = (*C.llama_token)(unsafe.Pointer(&promptTokens[0]))
+	}
+
+	ret := C.llama_tokenize(vocab, cPrompt, C.int32_t(len(prompt)), tokenPtr, C.int32_t(len(promptTokens)), true, true)
+
+	if ret < 0 {
+		return "", fmt.Errorf("failed to tokenize prompt")
+	}
+
+	batch := C.llama_batch_get_one((*C.llama_token)(unsafe.Pointer(&promptTokens[0])), C.int32_t(len(promptTokens)))
+
+	var newTokenID C.llama_token
+	var nCtx C.uint32_t
+	var nCtxUsed C.llama_pos
+
+	for {
+		// Check context size
+		nCtx = C.llama_n_ctx(ctx)
+
+		nCtxUsed = C.llama_memory_seq_pos_max(C.llama_get_memory(ctx), 0) + 1
+
+		if C.uint32_t(nCtxUsed)+C.uint32_t(batch.n_tokens) > nCtx {
+			fmt.Print("\n\033[0m")
+			fmt.Println("Current nCtxUsed and nCtx is: ",int(nCtxUsed),nCtx)
+			return "", fmt.Errorf("context size exceeded")
+		}
+
+		// Run the model
+		ret := C.llama_decode(ctx, batch)
+		if ret != 0 {
+			return "", fmt.Errorf("failed to decode, ret = %d", ret)
+		}
+
+		// Sample next token
+		newTokenID = C.llama_sampler_sample(smpl, ctx, -1)
+
+		// End of generation?
+		if C.llama_vocab_is_eog(vocab, newTokenID) {
+			fmt.Print("\n\033[0m")
+			fmt.Println("EOG Token was generated: ",int(newTokenID))
+			break
+		}
+
+		// Convert token -> text
+		var buf [256]C.char
+
+		n := C.llama_token_to_piece(vocab, newTokenID, &buf[0], C.int32_t(len(buf)), 0, true)
+
+		if n < 0 {
+			return "", fmt.Errorf("failed to convert token to piece")
+		}
+
+		// Convert C buffer -> Go string
+		piece := C.GoStringN(&buf[0], n)
+
+		fmt.Print(piece)
+		response += piece
+
+		// Prepare next batch with the sampled token
+		batch = C.llama_batch_get_one(&newTokenID, 1)
+	}
+
+	fmt.Println("Current nCtxUsed and nCtx is: ",int(nCtxUsed),nCtx)
+
+	return response, nil
+}
+
+func convo(prompt promptData) error {
+
+	messages := make([]C.llama_chat_message, 0)
+	formatted := make([]C.char, int(C.llama_n_ctx(prompt.ctx)))
+	prevLen := 0
+
+	for {
+		fmt.Print("> ")
+
+		reader := bufio.NewReader(os.Stdin)
+		user, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		prompt.prompt = user
+
+		if user == "END" {
+			break
+		}
+
+		// Get chat template
+		tmpl := C.llama_model_chat_template(prompt.model, nil)
+
+		// Create C string for user's message
+		cUser := C.CString(user)
+
+		// Add user message
+		messages = append(messages, C.llama_chat_message{
+			role:    C.CString("user"),
+			content: cUser,
+		})
+
+		// Apply chat template
+		newLen := C.llama_chat_apply_template(tmpl, (*C.llama_chat_message)(unsafe.Pointer(&messages[0])), C.size_t(len(messages)), true, &formatted[0], C.int32_t(len(formatted)))
+
+		// Resize if buffer wasn't large enough
+		if newLen > C.int32_t(len(formatted)) {
+			formatted = make([]C.char, int(newLen))
+			newLen = C.llama_chat_apply_template(tmpl, (*C.llama_chat_message)(unsafe.Pointer(&messages[0])), C.size_t(len(messages)), true, &formatted[0], C.int32_t(len(formatted)))
+		}
+
+		if newLen < 0 {
+			return fmt.Errorf("failed to apply chat template")
+		}
+
+		// Get only the newly added portion of the formatted prompt
+		promptString := C.GoStringN(
+			&formatted[prevLen],
+			newLen-C.int32_t(prevLen),
+		)
+
+		prompt.prompt = promptString
+
+		// Generate response
+		fmt.Print("\033[33m")
+
+		response, err := Generate(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl)
+		if err != nil {
+			return err
+		}
+
+		fmt.Print("\n\033[0m")
+
+		// Add assistant response to messages
+		cResponse := C.CString(response)
+
+		messages = append(messages, C.llama_chat_message{
+			role:    C.CString("assistant"),
+			content: cResponse,
+		})
+
+		// Calculate formatted length WITHOUT adding assistant generation prompt
+		prevLen = int(C.llama_chat_apply_template(tmpl, (*C.llama_chat_message)(unsafe.Pointer(&messages[0])), C.size_t(len(messages)), false, nil, 0))
+
+		if prevLen < 0 {
+			return fmt.Errorf("failed to apply chat template")
+		}
+	}
+
+	return nil
 }
