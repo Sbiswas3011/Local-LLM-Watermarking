@@ -22,27 +22,32 @@ import "C"
 import (
 	"bufio"
 	"fmt"
+	wm "main/watermarking"
 	"os"
+	"strings"
 	"unsafe"
 )
 
-func main() {
+func InitModel() {
 	fmt.Println("llama.cpp C API loaded")
 	fmt.Printf("llama.cpp version: %s\n", C.GoString(C.llama_version()))
 	modelPath := "C:/Users/JAYANTA/Desktop/gguf_store/Swift-Qwen3.8-27B-Q4_K_M.gguf"
 
-	initModel(modelPath)
+	initGenerationParams(modelPath)
 }
 
 type promptData struct {
-	prompt string
-	vocab  *C.struct_llama_vocab
-	ctx    *C.struct_llama_context
-	smpl   *C.struct_llama_sampler
-	model  *C.struct_llama_model
+	prompt          string
+	enableWatermark bool
+	vocab           *C.struct_llama_vocab
+	ctx             *C.struct_llama_context
+	smpl            *C.struct_llama_sampler
+	model           *C.struct_llama_model
 }
 
-func initModel(modelPath string) error {
+var tokenChan chan string
+
+func initGenerationParams(modelPath string) error {
 
 	// C.ggml_backend_load_all()
 	model_params := C.llama_model_default_params()
@@ -71,24 +76,47 @@ func initModel(modelPath string) error {
 		return fmt.Errorf("Could not set sampler")
 	}
 	defer C.llama_sampler_free(smpl)
-	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_greedy())
+	// C.llama_sampler_chain_add(smpl, C.llama_sampler_init_greedy())
+	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_temp(C.float(0.8)))
+	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_top_k(40))
+	// C.llama_sampler_chain_add(smpl, C.llama_sampler_init_dist(0))
+
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Println("Enable watermarking? (y/n): ")
+	input, _ := reader.ReadString('\n')
+
+	watermarkEnabled := strings.TrimSpace(strings.ToLower(input)) == "y"
 
 	data := promptData{
 		prompt: "",
+		enableWatermark: watermarkEnabled,
 		vocab:  vocab,
 		ctx:    ctx,
 		smpl:   smpl,
 		model:  model,
 	}
 
-	convo(data)
+	nCtx := C.llama_n_ctx(ctx)
+
+	tokenChan = make(chan string, nCtx)
+
+	RunConvo(data)
+
+	close(tokenChan)
 
 	return nil
 }
 
-func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_context, smpl *C.struct_llama_sampler) (string, error) {
+func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_context, smpl *C.struct_llama_sampler, watermark bool) (string, error) {
 	cPrompt := C.CString(prompt)
 	defer C.free(unsafe.Pointer(cPrompt))
+
+	file, err := os.Create("output.txt")
+	if err != nil {
+		return "", fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer file.Close()
 
 	response := ""
 
@@ -121,7 +149,7 @@ func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_co
 
 		if C.uint32_t(nCtxUsed)+C.uint32_t(batch.n_tokens) > nCtx {
 			fmt.Print("\n\033[0m")
-			fmt.Println("Current nCtxUsed and nCtx is: ",int(nCtxUsed),nCtx)
+			fmt.Println("Current nCtxUsed and nCtx is: ", int(nCtxUsed), nCtx)
 			return "", fmt.Errorf("context size exceeded")
 		}
 
@@ -131,13 +159,28 @@ func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_co
 			return "", fmt.Errorf("failed to decode, ret = %d", ret)
 		}
 
+		//watermarking outside by modifying logits
+		if watermark{
+			logitsPtr := C.llama_get_logits(ctx)
+			vocabSize := C.llama_vocab_n_tokens(vocab)
+
+			logits := unsafe.Slice((*C.float)(unsafe.Pointer(logitsPtr)), int(vocabSize))
+
+			for i := 0; i < int(vocabSize); i++ {
+				tokenInt := int(C.llama_token(i))
+				if wm.IsGreen(tokenInt) {
+					logits[i] += C.float(3.0)
+				}
+			}
+		}
+
 		// Sample next token
 		newTokenID = C.llama_sampler_sample(smpl, ctx, -1)
 
 		// End of generation?
 		if C.llama_vocab_is_eog(vocab, newTokenID) {
 			fmt.Print("\n\033[0m")
-			fmt.Println("EOG Token was generated: ",int(newTokenID))
+			fmt.Println("EOG Token was generated: ", int(newTokenID))
 			break
 		}
 
@@ -154,18 +197,29 @@ func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_co
 		piece := C.GoStringN(&buf[0], n)
 
 		fmt.Print(piece)
+		tokenChan <- piece
 		response += piece
+
+		_, err = file.WriteString(piece)
+		if err != nil {
+			return "", fmt.Errorf("failed to write to output file: %w", err)
+		}
+
+		err = file.Sync()
+		if err != nil {
+			return "", fmt.Errorf("failed to flush output file: %w", err)
+		}
 
 		// Prepare next batch with the sampled token
 		batch = C.llama_batch_get_one(&newTokenID, 1)
 	}
 
-	fmt.Println("Current nCtxUsed and nCtx is: ",int(nCtxUsed),nCtx)
+	fmt.Println("Current nCtxUsed and nCtx is: ", int(nCtxUsed), nCtx)
 
 	return response, nil
 }
 
-func convo(prompt promptData) error {
+func RunConvo(prompt promptData) error {
 
 	messages := make([]C.llama_chat_message, 0)
 	formatted := make([]C.char, int(C.llama_n_ctx(prompt.ctx)))
@@ -181,7 +235,8 @@ func convo(prompt promptData) error {
 		}
 		prompt.prompt = user
 
-		if user == "END" {
+		fmt.Println("Registered Prompt: ",strings.TrimSpace(strings.ToLower(user)))
+		if strings.TrimSpace(strings.ToLower(user)) == "end" {
 			break
 		}
 
@@ -218,14 +273,15 @@ func convo(prompt promptData) error {
 
 		prompt.prompt = promptString
 
-		// Generate response
+		// Generate response YELLOW
 		fmt.Print("\033[33m")
 
-		response, err := Generate(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl)
+		response, err := Generate(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl, prompt.enableWatermark)
 		if err != nil {
 			return err
 		}
 
+		//End Yellow
 		fmt.Print("\n\033[0m")
 
 		// Add assistant response to messages
