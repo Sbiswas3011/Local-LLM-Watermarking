@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -15,11 +17,22 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+type wSMessage struct {
+	Type      string `json:"type"`
+	Text      string `json:"text"`
+	Watermark bool   `json:"watermark"`
+}
+
 func main() {
 
 	// Initialize your token channel.
 	// Replace 4096 with your llama context size later.
-	tokenChan = make(chan string, 4096)
+	// tokenChan = make(chan string, 4096)
+
+	err := InitModel()
+	if err != nil {
+		panic(err)
+	}
 
 	router := gin.Default()
 
@@ -45,16 +58,24 @@ func websocketHandler(c *gin.Context) {
 				return
 			}
 
-			println("Received:", string(msg))
+			var message wSMessage
 
-			// TODO:
-			// Parse message and start/stop generation.
+			err = json.Unmarshal(msg, &message)
+			if err != nil {
+				println("Invalid JSON")
+				continue
+			}
+
+			fmt.Println("Received message:", message.Text, "Watermark:", message.Watermark, "Type:", message.Type)
+
+			StartGenerationwithParams(message.Text, message.Watermark)
+
 		}
 
 	}()
 
 	// Send generated tokens to browser.
-	for token := range tokenChan {
+	for token := range TokenChan {
 
 		err := conn.WriteMessage(
 			websocket.TextMessage,

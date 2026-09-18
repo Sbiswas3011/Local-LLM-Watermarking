@@ -28,15 +28,9 @@ import (
 	"unsafe"
 )
 
-func InitModel() {
-	fmt.Println("llama.cpp C API loaded")
-	fmt.Printf("llama.cpp version: %s\n", C.GoString(C.llama_version()))
-	modelPath := "C:/Users/JAYANTA/Desktop/gguf_store/Swift-Qwen3.8-27B-Q4_K_M.gguf"
+var ModelPath string
 
-	initGenerationParams(modelPath)
-}
-
-type promptData struct {
+type PromptData struct {
 	prompt          string
 	enableWatermark bool
 	vocab           *C.struct_llama_vocab
@@ -45,21 +39,25 @@ type promptData struct {
 	model           *C.struct_llama_model
 }
 
-var tokenChan chan string
+var TokenChan chan string
 
-func initGenerationParams(modelPath string) error {
+var Data = PromptData{}
 
-	// C.ggml_backend_load_all()
+func InitModel() error {
+	fmt.Println("llama.cpp C API loaded")
+	fmt.Printf("llama.cpp version: %s\n", C.GoString(C.llama_version()))
+	ModelPath = "C:/Users/JAYANTA/Desktop/gguf_store/Swift-Qwen3.8-27B-Q4_K_M.gguf"
+
 	model_params := C.llama_model_default_params()
 	model_params.n_gpu_layers = C.int(99)
 
 	C.disable_llama_logs()
 
-	model := C.llama_model_load_from_file(C.CString(modelPath), model_params)
+	model := C.llama_model_load_from_file(C.CString(ModelPath), model_params)
 	if model == nil {
 		return fmt.Errorf("Model Not Found")
 	}
-	defer C.llama_model_free(model)
+	// defer C.llama_model_free(model)
 
 	vocab := C.llama_model_get_vocab(model)
 	ctx_params := C.llama_context_default_params()
@@ -69,46 +67,60 @@ func initGenerationParams(modelPath string) error {
 	if ctx == nil {
 		return fmt.Errorf("Could not set context")
 	}
-	defer C.llama_free(ctx)
+	// defer C.llama_free(ctx)
 
 	smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
 	if smpl == nil {
 		return fmt.Errorf("Could not set sampler")
 	}
-	defer C.llama_sampler_free(smpl)
+	// defer C.llama_sampler_free(smpl)
 	// C.llama_sampler_chain_add(smpl, C.llama_sampler_init_greedy())
 	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_temp(C.float(0.8)))
 	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_top_k(40))
-	// C.llama_sampler_chain_add(smpl, C.llama_sampler_init_dist(0))
+	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_dist(0))
 
-	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("Model Loaded Successfully")
 
-	fmt.Println("Enable watermarking? (y/n): ")
-	input, _ := reader.ReadString('\n')
-
-	watermarkEnabled := strings.TrimSpace(strings.ToLower(input)) == "y"
-
-	data := promptData{
-		prompt: "",
-		enableWatermark: watermarkEnabled,
-		vocab:  vocab,
-		ctx:    ctx,
-		smpl:   smpl,
-		model:  model,
+	Data = PromptData{
+		prompt:          "",
+		enableWatermark: false,
+		vocab:           vocab,
+		ctx:             ctx,
+		smpl:            smpl,
+		model:           model,
 	}
 
-	nCtx := C.llama_n_ctx(ctx)
+	fmt.Println(Data.prompt, Data.enableWatermark, Data.vocab, Data.ctx, Data.smpl, Data.model)
 
-	tokenChan = make(chan string, nCtx)
+	return nil
+}
 
-	RunConvo(data)
+func StartGenerationwithParams(prompt string, dowatermark bool) error {
 
-	close(tokenChan)
+	//Manual Terminal Testing
+	// reader := bufio.NewReader(os.Stdin)
+
+	// fmt.Println("Enable watermarking? (y/n): ")
+	// input, _ := reader.ReadString('\n')
+
+	// dowatermark := strings.TrimSpace(strings.ToLower(input)) == "y"
+
+	Data.enableWatermark = dowatermark
+	Data.prompt = prompt
+
+	nCtx := C.llama_n_ctx(Data.ctx)
+
+	TokenChan = make(chan string, nCtx)
+
+	RunWebsocketConvo(Data)
 
 	return nil
 }
 
 func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_context, smpl *C.struct_llama_sampler, watermark bool) (string, error) {
+
+	defer close(TokenChan)
+
 	cPrompt := C.CString(prompt)
 	defer C.free(unsafe.Pointer(cPrompt))
 
@@ -142,6 +154,16 @@ func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_co
 	var nCtxUsed C.llama_pos
 
 	for {
+
+		select {
+		case <-closeChan:
+			fmt.Println("Generation stopped")
+			defer C.llama_sampler_free(smpl)
+			defer C.llama_free(ctx)
+			defer C.llama_model_free(Data.model)
+			return response, nil
+		default:
+		}
 		// Check context size
 		nCtx = C.llama_n_ctx(ctx)
 
@@ -160,7 +182,7 @@ func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_co
 		}
 
 		//watermarking outside by modifying logits
-		if watermark{
+		if watermark {
 			logitsPtr := C.llama_get_logits(ctx)
 			vocabSize := C.llama_vocab_n_tokens(vocab)
 
@@ -197,7 +219,7 @@ func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_co
 		piece := C.GoStringN(&buf[0], n)
 
 		fmt.Print(piece)
-		tokenChan <- piece
+		TokenChan <- piece
 		response += piece
 
 		_, err = file.WriteString(piece)
@@ -219,7 +241,25 @@ func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_co
 	return response, nil
 }
 
-func RunConvo(prompt promptData) error {
+var closeChan = make(chan struct{})
+
+func RunWebsocketConvo(prompt PromptData) error {
+
+	if strings.TrimSpace(strings.ToLower(prompt.prompt)) == "end" {
+		return nil
+	}
+	fmt.Println(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl, prompt.enableWatermark)
+	go func() {
+		_, err := Generate(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl, prompt.enableWatermark)
+		if err != nil {
+			fmt.Println("failed to generate")
+		}
+	}()
+
+	return nil
+}
+
+func RunManualConvo(prompt PromptData) error {
 
 	messages := make([]C.llama_chat_message, 0)
 	formatted := make([]C.char, int(C.llama_n_ctx(prompt.ctx)))
@@ -235,7 +275,7 @@ func RunConvo(prompt promptData) error {
 		}
 		prompt.prompt = user
 
-		fmt.Println("Registered Prompt: ",strings.TrimSpace(strings.ToLower(user)))
+		fmt.Println("Registered Prompt: ", strings.TrimSpace(strings.ToLower(user)))
 		if strings.TrimSpace(strings.ToLower(user)) == "end" {
 			break
 		}
