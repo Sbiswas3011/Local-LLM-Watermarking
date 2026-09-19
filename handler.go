@@ -9,8 +9,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// var tokenChan chan string
-
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true // localhost only for now
@@ -24,10 +22,6 @@ type wSMessage struct {
 }
 
 func main() {
-
-	// Initialize your token channel.
-	// Replace 4096 with your llama context size later.
-	// tokenChan = make(chan string, 4096)
 
 	err := InitModel()
 	if err != nil {
@@ -49,6 +43,8 @@ func websocketHandler(c *gin.Context) {
 	}
 	defer conn.Close()
 
+	TokenChan = make(chan string, 32)
+
 	// Read messages from browser.
 	go func() {
 
@@ -68,7 +64,7 @@ func websocketHandler(c *gin.Context) {
 
 			fmt.Println("Received message:", message.Text, "Watermark:", message.Watermark, "Type:", message.Type)
 
-			StartGenerationwithParams(message.Text, message.Watermark)
+			StartGenerationwithParams(message.Text, message.Watermark, TokenChan)
 
 		}
 
@@ -77,6 +73,7 @@ func websocketHandler(c *gin.Context) {
 	// Send generated tokens to browser.
 	for token := range TokenChan {
 
+		// fmt.Println("Token Before Write: ",token)
 		err := conn.WriteMessage(
 			websocket.TextMessage,
 			[]byte(token),
@@ -87,3 +84,9 @@ func websocketHandler(c *gin.Context) {
 		}
 	}
 }
+
+// {
+//     "type": "something",
+//     "text": "Hello Model, how are you doing today?"
+//     "watermark": true
+// }

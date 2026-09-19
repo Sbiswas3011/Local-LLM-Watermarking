@@ -37,6 +37,7 @@ type PromptData struct {
 	ctx             *C.struct_llama_context
 	smpl            *C.struct_llama_sampler
 	model           *C.struct_llama_model
+	tokenchannel    chan string
 }
 
 var TokenChan chan string
@@ -88,14 +89,15 @@ func InitModel() error {
 		ctx:             ctx,
 		smpl:            smpl,
 		model:           model,
+		tokenchannel:    TokenChan,
 	}
 
-	fmt.Println(Data.prompt, Data.enableWatermark, Data.vocab, Data.ctx, Data.smpl, Data.model)
+	fmt.Println("Data Variables: ", Data.prompt, Data.enableWatermark, Data.vocab, Data.ctx, Data.smpl, Data.model)
 
 	return nil
 }
 
-func StartGenerationwithParams(prompt string, dowatermark bool) error {
+func StartGenerationwithParams(prompt string, dowatermark bool, tokenchan chan string) error {
 
 	//Manual Terminal Testing
 	// reader := bufio.NewReader(os.Stdin)
@@ -104,20 +106,18 @@ func StartGenerationwithParams(prompt string, dowatermark bool) error {
 	// input, _ := reader.ReadString('\n')
 
 	// dowatermark := strings.TrimSpace(strings.ToLower(input)) == "y"
+	// PossiblyNewCtx and NewSmpler needed
+	NewData := Data
+	NewData.enableWatermark = dowatermark
+	NewData.prompt = prompt
+	NewData.tokenchannel = tokenchan
 
-	Data.enableWatermark = dowatermark
-	Data.prompt = prompt
-
-	nCtx := C.llama_n_ctx(Data.ctx)
-
-	TokenChan = make(chan string, nCtx)
-
-	RunWebsocketConvo(Data)
+	RunConvo(NewData, true)
 
 	return nil
 }
 
-func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_context, smpl *C.struct_llama_sampler, watermark bool) (string, error) {
+func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_context, smpl *C.struct_llama_sampler, watermark bool, Tokenchan chan string) (string, error) {
 
 	defer close(TokenChan)
 
@@ -155,15 +155,15 @@ func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_co
 
 	for {
 
-		select {
-		case <-closeChan:
-			fmt.Println("Generation stopped")
-			defer C.llama_sampler_free(smpl)
-			defer C.llama_free(ctx)
-			defer C.llama_model_free(Data.model)
-			return response, nil
-		default:
-		}
+		// select {
+		// case <-closeChan:
+		// 	fmt.Println("Generation stopped")
+		// 	defer C.llama_sampler_free(smpl)
+		// 	defer C.llama_free(ctx)
+		// 	defer C.llama_model_free(Data.model)
+		// 	return response, nil
+		// default:
+		// }
 		// Check context size
 		nCtx = C.llama_n_ctx(ctx)
 
@@ -241,42 +241,29 @@ func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_co
 	return response, nil
 }
 
-var closeChan = make(chan struct{})
+// var closeChan = make(chan bool)
 
-func RunWebsocketConvo(prompt PromptData) error {
-
-	if strings.TrimSpace(strings.ToLower(prompt.prompt)) == "end" {
-		return nil
-	}
-	fmt.Println(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl, prompt.enableWatermark)
-	go func() {
-		_, err := Generate(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl, prompt.enableWatermark)
-		if err != nil {
-			fmt.Println("failed to generate")
-		}
-	}()
-
-	return nil
-}
-
-func RunManualConvo(prompt PromptData) error {
+func RunConvo(prompt PromptData, websocket bool) error {
 
 	messages := make([]C.llama_chat_message, 0)
 	formatted := make([]C.char, int(C.llama_n_ctx(prompt.ctx)))
 	prevLen := 0
 
 	for {
-		fmt.Print("> ")
 
-		reader := bufio.NewReader(os.Stdin)
-		user, err := reader.ReadString('\n')
-		if err != nil {
-			return err
+		if !websocket {
+			fmt.Print("> ")
+
+			reader := bufio.NewReader(os.Stdin)
+			user, err := reader.ReadString('\n')
+			if err != nil {
+				return err
+			}
+			prompt.prompt = user
+			// fmt.Println("Registered Prompt: ", strings.TrimSpace(strings.ToLower(user)))
 		}
-		prompt.prompt = user
 
-		fmt.Println("Registered Prompt: ", strings.TrimSpace(strings.ToLower(user)))
-		if strings.TrimSpace(strings.ToLower(user)) == "end" {
+		if strings.TrimSpace(strings.ToLower(prompt.prompt)) == "end" {
 			break
 		}
 
@@ -284,7 +271,7 @@ func RunManualConvo(prompt PromptData) error {
 		tmpl := C.llama_model_chat_template(prompt.model, nil)
 
 		// Create C string for user's message
-		cUser := C.CString(user)
+		cUser := C.CString(prompt.prompt)
 
 		// Add user message
 		messages = append(messages, C.llama_chat_message{
@@ -314,15 +301,15 @@ func RunManualConvo(prompt PromptData) error {
 		prompt.prompt = promptString
 
 		// Generate response YELLOW
-		fmt.Print("\033[33m")
+		// fmt.Print("\033[33m")
 
-		response, err := Generate(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl, prompt.enableWatermark)
+		response, err := Generate(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl, prompt.enableWatermark, prompt.tokenchannel)
 		if err != nil {
 			return err
 		}
 
 		//End Yellow
-		fmt.Print("\n\033[0m")
+		// fmt.Print("\n\033[0m")
 
 		// Add assistant response to messages
 		cResponse := C.CString(response)
