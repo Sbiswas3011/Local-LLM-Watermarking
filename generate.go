@@ -22,7 +22,8 @@ import "C"
 import (
 	"bufio"
 	"fmt"
-	wm "main/watermarking"
+
+	// wm "main/watermarking"
 	"os"
 	"strings"
 	"unsafe"
@@ -37,10 +38,13 @@ type PromptData struct {
 	ctx             *C.struct_llama_context
 	smpl            *C.struct_llama_sampler
 	model           *C.struct_llama_model
-	tokenchannel    chan string
+	ResultChan      chan TokenResult
+	// tokenchannel    chan string
+	// tokenIDchannel  chan C.llama_token
 }
-
-var TokenChan chan string
+// var ResultChan = make(chan TokenResult)
+// var TokenChan chan string
+// var TokenIDChan chan C.llama_token
 
 var Data = PromptData{}
 
@@ -76,9 +80,10 @@ func InitModel() error {
 	}
 	// defer C.llama_sampler_free(smpl)
 	// C.llama_sampler_chain_add(smpl, C.llama_sampler_init_greedy())
-	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_temp(C.float(0.8)))
-	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_top_k(40))
-	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_dist(0))
+	// C.llama_sampler_chain_add(smpl, C.llama_sampler_init_temp(C.float(0.8)))
+	// C.llama_sampler_chain_add(smpl, C.llama_sampler_init_green_red(C.int32_t(4)))
+	// C.llama_sampler_chain_add(smpl, C.llama_sampler_init_top_k(40))
+	// C.llama_sampler_chain_add(smpl, C.llama_sampler_init_dist(0))
 
 	fmt.Println("Model Loaded Successfully")
 
@@ -89,7 +94,9 @@ func InitModel() error {
 		ctx:             ctx,
 		smpl:            smpl,
 		model:           model,
-		tokenchannel:    TokenChan,
+		// tokenchannel:    TokenChan,
+		// tokenIDchannel:  TokenIDChan,
+		// ResultChan:      ResultChan,
 	}
 
 	fmt.Println("Data Variables: ", Data.prompt, Data.enableWatermark, Data.vocab, Data.ctx, Data.smpl, Data.model)
@@ -97,7 +104,7 @@ func InitModel() error {
 	return nil
 }
 
-func StartGenerationwithParams(prompt string, dowatermark bool, tokenchan chan string) error {
+func StartGenerationwithParams(prompt string, dowatermark bool, ResultChan chan TokenResult) error {
 
 	//Manual Terminal Testing
 	// reader := bufio.NewReader(os.Stdin)
@@ -110,16 +117,31 @@ func StartGenerationwithParams(prompt string, dowatermark bool, tokenchan chan s
 	NewData := Data
 	NewData.enableWatermark = dowatermark
 	NewData.prompt = prompt
-	NewData.tokenchannel = tokenchan
+	// NewData.tokenchannel = tokenchan
+	// NewData.tokenIDchannel = TokenIDChan
+	NewData.ResultChan = ResultChan
+
+	if dowatermark {
+		fmt.Println("Watermarking is enabled")
+		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_green_red(C.int32_t(4)))
+		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_top_k(40))
+		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_dist(0))
+	} else {
+		fmt.Println("Watermarking is disabled")
+		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_top_k(40))
+		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_dist(0))
+	}
 
 	RunConvo(NewData, true)
 
 	return nil
 }
 
-func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_context, smpl *C.struct_llama_sampler, watermark bool, Tokenchan chan string) (string, error) {
+func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_context, smpl *C.struct_llama_sampler, watermark bool, ResultChan chan TokenResult) (string, error) {
 
-	defer close(TokenChan)
+	// defer close(TokenChan)
+	// defer close(TokenIDChan)
+	defer close(ResultChan)
 
 	cPrompt := C.CString(prompt)
 	defer C.free(unsafe.Pointer(cPrompt))
@@ -181,23 +203,10 @@ func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_co
 			return "", fmt.Errorf("failed to decode, ret = %d", ret)
 		}
 
-		//watermarking outside by modifying logits
-		if watermark {
-			logitsPtr := C.llama_get_logits(ctx)
-			vocabSize := C.llama_vocab_n_tokens(vocab)
-
-			logits := unsafe.Slice((*C.float)(unsafe.Pointer(logitsPtr)), int(vocabSize))
-
-			for i := 0; i < int(vocabSize); i++ {
-				tokenInt := int(C.llama_token(i))
-				if wm.IsGreen(tokenInt) {
-					logits[i] += C.float(3.0)
-				}
-			}
-		}
 
 		// Sample next token
 		newTokenID = C.llama_sampler_sample(smpl, ctx, -1)
+		// TokenIDChan <- newTokenID
 
 		// End of generation?
 		if C.llama_vocab_is_eog(vocab, newTokenID) {
@@ -218,8 +227,10 @@ func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_co
 		// Convert C buffer -> Go string
 		piece := C.GoStringN(&buf[0], n)
 
+		BasicGreenStreamPercentage(newTokenID, piece, ResultChan)
+
 		fmt.Print(piece)
-		TokenChan <- piece
+		// TokenChan <- piece
 		response += piece
 
 		_, err = file.WriteString(piece)
@@ -303,7 +314,7 @@ func RunConvo(prompt PromptData, websocket bool) error {
 		// Generate response YELLOW
 		// fmt.Print("\033[33m")
 
-		response, err := Generate(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl, prompt.enableWatermark, prompt.tokenchannel)
+		response, err := Generate(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl, prompt.enableWatermark, prompt.ResultChan)
 		if err != nil {
 			return err
 		}

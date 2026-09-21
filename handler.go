@@ -1,5 +1,24 @@
 package main
 
+/*
+#cgo CFLAGS: -IC:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/include -IC:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/ggml/include
+#cgo LDFLAGS: -L"C:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/build/src/Release" -lllama
+#include "llama.h"
+#include <stdlib.h>
+static void silent_log_callback(
+    enum ggml_log_level level,
+    const char * text,
+    void * user_data) {
+    (void) level;
+    (void) text;
+    (void) user_data;
+}
+static void disable_llama_logs(void) {
+    llama_log_set(silent_log_callback, NULL);
+}
+*/
+import "C"
+
 import (
 	"encoding/json"
 	"fmt"
@@ -43,7 +62,9 @@ func websocketHandler(c *gin.Context) {
 	}
 	defer conn.Close()
 
-	TokenChan = make(chan string, 32)
+	// TokenChan = make(chan string, 32)
+	// TokenIDChan = make(chan C.llama_token, 32)
+	ResultChan := make(chan TokenResult, 32)
 
 	// Read messages from browser.
 	go func() {
@@ -64,21 +85,25 @@ func websocketHandler(c *gin.Context) {
 
 			fmt.Println("Received message:", message.Text, "Watermark:", message.Watermark, "Type:", message.Type)
 
-			StartGenerationwithParams(message.Text, message.Watermark, TokenChan)
+			StartGenerationwithParams(message.Text, message.Watermark, ResultChan)
 
 		}
 
 	}()
 
 	// Send generated tokens to browser.
-	for token := range TokenChan {
+	for token := range ResultChan {
+
+		data, err := json.Marshal(token)
+		if err != nil {
+			return
+		}
 
 		// fmt.Println("Token Before Write: ",token)
-		err := conn.WriteMessage(
+		err = conn.WriteMessage(
 			websocket.TextMessage,
-			[]byte(token),
+			data,
 		)
-
 		if err != nil {
 			return
 		}
