@@ -164,11 +164,15 @@ type TokenResult struct {
 	TotalCount int
 }
 
-func BasicGreenStreamPercentage(TokenID C.llama_token, Token string, ResultChan chan TokenResult) error {
+func BasicGreenStreamPercentage(TokenID C.llama_token, Token string, ResultChan chan TokenResult, history unsafe.Pointer, history_size int, n_vocab int) error {
 	totalCount := 0
 	greenCount := 0
+	isGreen := false
+	seed := "i_am_a_llm"
+	seedC := C.CString(seed)
+	defer C.free(unsafe.Pointer(seedC))
 
-	isGreen := C.llama_sampler_check_watermark(TokenID)
+	isGreen = bool(C.llama_sampler_check_basic_watermarkv2(TokenID, C.float(0.6), seedC, history, C.size_t(history_size), C.int32_t(n_vocab)))
 
 	if isGreen {
 		greenCount++

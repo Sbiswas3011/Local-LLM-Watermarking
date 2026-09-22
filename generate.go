@@ -39,9 +39,11 @@ type PromptData struct {
 	smpl            *C.struct_llama_sampler
 	model           *C.struct_llama_model
 	ResultChan      chan TokenResult
+	history         unsafe.Pointer
 	// tokenchannel    chan string
 	// tokenIDchannel  chan C.llama_token
 }
+
 // var ResultChan = make(chan TokenResult)
 // var TokenChan chan string
 // var TokenIDChan chan C.llama_token
@@ -121,9 +123,15 @@ func StartGenerationwithParams(prompt string, dowatermark bool, ResultChan chan 
 	// NewData.tokenIDchannel = TokenIDChan
 	NewData.ResultChan = ResultChan
 
+	seed := "i_am_a_llm"
+	seedC := C.CString(seed)
+	defer C.free(unsafe.Pointer(seedC))
+	history := C.llama_token_history_create()
+	NewData.history = history
+
 	if dowatermark {
 		fmt.Println("Watermarking is enabled")
-		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_green_red(C.int32_t(4)))
+		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_green_red(C.float(1.0), C.float(0.6), seedC, history))
 		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_top_k(40))
 		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_dist(0))
 	} else {
@@ -137,7 +145,7 @@ func StartGenerationwithParams(prompt string, dowatermark bool, ResultChan chan 
 	return nil
 }
 
-func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_context, smpl *C.struct_llama_sampler, watermark bool, ResultChan chan TokenResult) (string, error) {
+func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_context, smpl *C.struct_llama_sampler, watermark bool, ResultChan chan TokenResult, history unsafe.Pointer) (string, error) {
 
 	// defer close(TokenChan)
 	// defer close(TokenIDChan)
@@ -203,10 +211,11 @@ func Generate(prompt string, vocab *C.struct_llama_vocab, ctx *C.struct_llama_co
 			return "", fmt.Errorf("failed to decode, ret = %d", ret)
 		}
 
-
 		// Sample next token
 		newTokenID = C.llama_sampler_sample(smpl, ctx, -1)
 		// TokenIDChan <- newTokenID
+		C.llama_token_history_add(history, C.llama_token(newTokenID))
+		C.llama_token_history_remove_oldest(history)
 
 		// End of generation?
 		if C.llama_vocab_is_eog(vocab, newTokenID) {
@@ -314,7 +323,7 @@ func RunConvo(prompt PromptData, websocket bool) error {
 		// Generate response YELLOW
 		// fmt.Print("\033[33m")
 
-		response, err := Generate(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl, prompt.enableWatermark, prompt.ResultChan)
+		response, err := Generate(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl, prompt.enableWatermark, prompt.ResultChan, prompt.history)
 		if err != nil {
 			return err
 		}
