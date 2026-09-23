@@ -20,6 +20,8 @@ static void disable_llama_logs(void) {
 import "C"
 
 import (
+	"fmt"
+	"math"
 	"unsafe"
 )
 
@@ -159,34 +161,126 @@ func greenPercentage(text string, vocab *C.struct_llama_vocab) float64 {
 }
 
 type TokenResult struct {
-	Token      string
-	GreenCount int
-	TotalCount int
+	Token           string
+	GreenCount      int
+	TotalCount      int
+	GreenPercentage float64
+	ZScore          float64
 }
 
-func BasicGreenStreamPercentage(TokenID C.llama_token, Token string, ResultChan chan TokenResult, history unsafe.Pointer, history_size int, n_vocab int) error {
-	totalCount := 0
-	greenCount := 0
+func BasicGreenStreamPercentage(prompt PromptData) (int, int, float64) {
+
 	isGreen := false
-	seed := "i_am_a_llm"
-	seedC := C.CString(seed)
+	seedC := C.CString(prompt.seed)
 	defer C.free(unsafe.Pointer(seedC))
 
-	isGreen = bool(C.llama_sampler_check_basic_watermarkv2(TokenID, C.float(0.6), seedC, history, C.size_t(history_size), C.int32_t(n_vocab)))
+	isGreen = bool(C.llama_sampler_check_basic_watermarkv2(prompt.newTokenID, C.float(prompt.gamma), seedC, prompt.tokenhistoryPtr, C.size_t(prompt.historySize), C.int32_t(prompt.n_vocab)))
 
 	if isGreen {
-		greenCount++
+		prompt.totalGreenTokenCnt++
 	}
 
-	totalCount++
+	prompt.totalTokenCnt++
+
+	expected := float64(prompt.totalTokenCnt) * prompt.gamma
+	variance := float64(prompt.totalTokenCnt) * prompt.gamma * (1.0 - prompt.gamma)
+	prompt.CurrentZscore = (float64(prompt.totalGreenTokenCnt) - expected) / math.Sqrt(variance)
 
 	result := TokenResult{
-		Token:      Token,
-		GreenCount: greenCount,
-		TotalCount: totalCount,
+		Token:           prompt.piece,
+		GreenCount:      prompt.totalGreenTokenCnt,
+		TotalCount:      prompt.totalTokenCnt,
+		GreenPercentage: float64(prompt.totalGreenTokenCnt * 100 / prompt.totalTokenCnt),
+		ZScore:          prompt.CurrentZscore,
 	}
 
-	ResultChan <- result
+	prompt.ResultChan <- result
+	// prompt.CloseResultChan <- true
 
-	return nil
+	return prompt.totalTokenCnt, prompt.totalGreenTokenCnt, prompt.CurrentZscore
+}
+
+func ProcessText(request ProcessRequest, data PromptData) (int, int, float64, error) {
+
+	data.historySize = request.HistorySize
+	data.gamma = request.Gamma
+	data.totalTokenCnt = 0
+	data.totalGreenTokenCnt = 0
+	seedC := C.CString(request.Seed)
+	defer C.free(unsafe.Pointer(seedC))
+
+	data.prompt = request.Text
+	cPrompt := C.CString(data.prompt)
+	defer C.free(unsafe.Pointer(cPrompt))
+
+	nPromptTokens := -C.llama_tokenize(data.vocab, cPrompt, C.int32_t(len(data.prompt)), nil, 0, true, true)
+
+	promptTokens := make([]C.llama_token, nPromptTokens)
+
+	var tokenPtr *C.llama_token
+	if nPromptTokens > 0 {
+		tokenPtr = (*C.llama_token)(unsafe.Pointer(&promptTokens[0]))
+	}
+
+	if len(promptTokens) <= data.historySize {
+		return 0, 0, 0, fmt.Errorf("text has too few tokens for history size %d", data.historySize)
+	}
+
+	data.totalTokenCnt = data.historySize
+
+	ret := C.llama_tokenize(data.vocab, cPrompt, C.int32_t(len(data.prompt)), tokenPtr, C.int32_t(len(promptTokens)), true, true)
+	if ret < 0 {
+		return 0, 0, 0.0, fmt.Errorf("failed to tokenize prompt")
+	}
+
+	// startToken := 0
+	// currentToken := data.historySize
+	// startToken := currentToken - data.historySize
+	// data.newTokenID = promptTokens[currentToken]
+
+	// gotokenhistory := promptTokens[startToken:currentToken]
+
+	// var tokenhistoryPtr *C.llama_token
+	// if len(gotokenhistory) > 0 {
+	// 	tokenhistoryPtr = (*C.llama_token)(unsafe.Pointer(&gotokenhistory[0]))
+	// }
+	// data.tokenhistoryPtr = tokenhistoryPtr
+
+	currentToken := data.historySize
+
+	for {
+		// fmt.Println("Current Token & mPromptTokens: ", currentToken, int(nPromptTokens)-1)
+		startToken := currentToken - data.historySize
+		data.newTokenID = promptTokens[currentToken]
+
+		gotokenhistory := promptTokens[startToken:currentToken]
+
+		var tokenhistoryPtr *C.llama_token
+		if len(gotokenhistory) > 0 {
+			tokenhistoryPtr = (*C.llama_token)(unsafe.Pointer(&gotokenhistory[0]))
+		}
+		data.tokenhistoryPtr = tokenhistoryPtr
+
+		isGreen := false
+
+		isGreen = bool(C.llama_sampler_check_basic_watermarkv2(data.newTokenID, C.float(data.gamma), seedC, data.tokenhistoryPtr, C.size_t(data.historySize), C.int32_t(data.n_vocab)))
+
+		if isGreen {
+			data.totalGreenTokenCnt++
+		}
+
+		data.totalTokenCnt++
+		currentToken++
+
+		if currentToken >= int(nPromptTokens)-1 {
+			break
+		}
+
+	}
+
+	expected := float64(data.totalTokenCnt) * request.Gamma
+	variance := float64(data.totalTokenCnt) * request.Gamma * (1.0 - request.Gamma)
+	data.CurrentZscore = (float64(data.totalGreenTokenCnt) - expected) / math.Sqrt(variance)
+
+	return data.totalTokenCnt, data.totalGreenTokenCnt, data.CurrentZscore, nil
 }
