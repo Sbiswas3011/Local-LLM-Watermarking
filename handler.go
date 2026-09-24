@@ -54,7 +54,66 @@ type ProcessRequest struct {
 }
 
 type Server struct {
-	Data PromptData
+	Data     PromptData
+	Sessions map[string]*Session
+}
+
+type Session struct {
+	ID         string
+	Watermark  *bool
+	Ctx        *C.struct_llama_context
+	Smpl       *C.struct_llama_sampler
+	// ResultChan chan TokenResult
+}
+
+func (s *Server) getOrCreateSession(id string) (*Session, error) {
+
+	// s.SessionsMu.RLock()
+	session, exists := s.Sessions[id]
+	// s.SessionsMu.RUnlock()
+
+	if exists {
+		return session, nil
+	}
+
+	ctx := C.llama_init_from_model(Model, Ctx_params)
+	if ctx == nil {
+		return nil, fmt.Errorf("Faild to create context")
+	}
+
+	// smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
+	// if smpl == nil {
+	// 	return nil, fmt.Errorf("Faild to create sampler")
+	// }
+
+	// Create context + sampler here
+	session = &Session{
+		ID:  id,
+		Ctx: ctx,
+		// Smpl:       smpl,
+		// ResultChan: make(chan TokenResult, 32),
+	}
+
+	// s.SessionsMu.Lock()
+
+	// Check again because another request could
+	// have created it while we were creating ours.
+	// existing, exists := s.Sessions[id]
+
+	// if exists {
+	//     s.SessionsMu.Unlock()
+
+	//     // Don't leak the context/sampler we just created.
+	//     C.llama_free(session.Ctx)
+	//     C.llama_sampler_free(session.Smpl)
+
+	//     return existing
+	// }
+
+	s.Sessions[id] = session
+	// s.SessionsMu.Unlock()
+
+	return session, nil
 }
 
 func main() {
@@ -65,7 +124,8 @@ func main() {
 	}
 
 	server := &Server{
-		Data: Data,
+		Data:     Data,
+		Sessions: make(map[string]*Session),
 	}
 
 	router := gin.Default()
@@ -79,11 +139,19 @@ func main() {
 
 func (s *Server) websocketHandler(c *gin.Context) {
 
+
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return
 	}
 	defer conn.Close()
+
+	sessionID := c.Query("session_id")
+	session, err := s.getOrCreateSession(sessionID)
+	if err != nil || session == nil {
+		println("Failed to Create Session")
+		return
+	}
 
 	// TokenChan = make(chan string, 32)
 	// TokenIDChan = make(chan C.llama_token, 32)
@@ -95,6 +163,7 @@ func (s *Server) websocketHandler(c *gin.Context) {
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
+				println(err)
 				return
 			}
 
@@ -108,12 +177,33 @@ func (s *Server) websocketHandler(c *gin.Context) {
 
 			fmt.Println("Received message:", message.Text, "Watermark:", message.Watermark, "Type:", message.Type)
 
-			generationOver, err := StartGenerationwithParams(message.Text, message.Watermark, message.HistorySize, message.Seed, message.Gamma, message.LogitBias, ResultChan, s.Data)
+			if session.Watermark != nil && session.Watermark == &message.Watermark {
+				s.Data.changeWaterMarkStatus = false
+			} else {
+				smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
+				if smpl == nil {
+					print("Failed to create sampler")
+				}
+				session.Smpl = smpl
+				s.Data.changeWaterMarkStatus = true
+			}
 
-			if err!= nil{
+			s.Data.enableWatermark = message.Watermark
+			s.Data.prompt = message.Text
+			s.Data.ResultChan = ResultChan
+			s.Data.seed = message.Seed
+			s.Data.gamma = message.Gamma
+			s.Data.logitbias = message.LogitBias
+			s.Data.historySize = message.HistorySize
+			s.Data.ctx = session.Ctx
+			s.Data.smpl = session.Smpl
+
+			generationOver, err := StartGenerationwithParams(s.Data)
+
+			if err != nil {
 				println("Error Occured During Generation", err)
 				break
-			}else if generationOver{
+			} else if generationOver {
 				break
 			}
 
@@ -245,6 +335,8 @@ func (s *Server) processTextHandler(c *gin.Context) {
 		"total_count": totalCnt,
 		"green_count": totalGreenCnt,
 		"z_score":     zscore,
+		"tokens_spent": "invalid",
+		"total_avaialble_tokens": "invalid",
 	})
 }
 
@@ -257,3 +349,9 @@ func (s *Server) processTextHandler(c *gin.Context) {
 //     "gamma": 0.6,
 //     "logit_bias": 4.0,
 // }
+
+// handle watermark sample swithcing
+//handle context cancelling and resetting
+// for non watermaring ignore variables sent
+//handle context exceeded
+//handle tokenhistory sampling

@@ -32,25 +32,28 @@ import (
 var ModelPath string
 
 type PromptData struct {
-	prompt             string
-	enableWatermark    bool
-	vocab              *C.struct_llama_vocab
-	ctx                *C.struct_llama_context
-	smpl               *C.struct_llama_sampler
-	model              *C.struct_llama_model
-	ResultChan         chan TokenResult
-	history            unsafe.Pointer
-	historySize        int
-	n_vocab            int
-	gamma              float64
-	logitbias          float64
-	seed               string
-	newTokenID         C.llama_token
-	piece              string
-	tokenhistoryPtr    *C.llama_token
-	totalTokenCnt      int
-	totalGreenTokenCnt int
-	CurrentZscore      float64
+	prompt                string
+	enableWatermark       bool
+	vocab                 *C.struct_llama_vocab
+	ctx                   *C.struct_llama_context
+	smpl                  *C.struct_llama_sampler
+	model                 *C.struct_llama_model
+	ResultChan            chan TokenResult
+	history               unsafe.Pointer
+	historySize           int
+	n_vocab               int
+	gamma                 float64
+	logitbias             float64
+	seed                  string
+	newTokenID            C.llama_token
+	piece                 string
+	tokenhistoryPtr       *C.llama_token
+	totalTokenCnt         int
+	totalGreenTokenCnt    int
+	CurrentZscore         float64
+	changeWaterMarkStatus bool
+	nctx                  C.uint32_t
+	nctxUsed              C.llama_pos
 	// tokenchannel    chan string
 	// tokenIDchannel  chan C.llama_token
 }
@@ -60,6 +63,10 @@ type PromptData struct {
 // var TokenIDChan chan C.llama_token
 
 // var Data = PromptData{}
+
+var Model *C.struct_llama_model
+var Ctx_params C.struct_llama_context_params
+// var Smpl *C.struct_llama_sampler
 
 func InitModel() (PromptData, error) {
 	fmt.Println("llama.cpp C API loaded")
@@ -77,11 +84,13 @@ func InitModel() (PromptData, error) {
 	if model == nil {
 		return Data, fmt.Errorf("Model Not Found")
 	}
+	Model = model
 	// defer C.llama_model_free(model)
 
 	vocab := C.llama_model_get_vocab(model)
 	ctx_params := C.llama_context_default_params()
 	ctx_params.n_ctx = 8192
+	Ctx_params = ctx_params
 
 	n_vocab := C.llama_vocab_n_tokens(vocab)
 
@@ -91,10 +100,11 @@ func InitModel() (PromptData, error) {
 	}
 	// defer C.llama_free(ctx)
 
-	smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
-	if smpl == nil {
-		return Data, fmt.Errorf("Could not set sampler")
-	}
+	// smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
+	// if smpl == nil {
+	// 	return Data, fmt.Errorf("Could not set sampler")
+	// }
+	// Smpl = smpl
 	// defer C.llama_sampler_free(smpl)
 	// C.llama_sampler_chain_add(smpl, C.llama_sampler_init_greedy())
 	// C.llama_sampler_chain_add(smpl, C.llama_sampler_init_temp(C.float(0.8)))
@@ -109,7 +119,7 @@ func InitModel() (PromptData, error) {
 		enableWatermark: false,
 		vocab:           vocab,
 		ctx:             ctx,
-		smpl:            smpl,
+		// smpl:            smpl,
 		model:           model,
 		n_vocab:         int(n_vocab),
 		// tokenchannel:    TokenChan,
@@ -122,7 +132,7 @@ func InitModel() (PromptData, error) {
 	return Data, nil
 }
 
-func StartGenerationwithParams(prompt string, dowatermark bool, historySize int, seed string, gamma float64, logitBias float64, ResultChan chan TokenResult, Data PromptData) (bool, error) {
+func StartGenerationwithParams(Data PromptData) (bool, error) {
 
 	//Manual Terminal Testing
 	// reader := bufio.NewReader(os.Stdin)
@@ -132,35 +142,40 @@ func StartGenerationwithParams(prompt string, dowatermark bool, historySize int,
 
 	// dowatermark := strings.TrimSpace(strings.ToLower(input)) == "y"
 	// PossiblyNewCtx and NewSmpler needed
-	NewData := Data
-	NewData.enableWatermark = dowatermark
-	NewData.prompt = prompt
+	// NewData := Data
+	// NewData.enableWatermark = dowatermark
+	// NewData.prompt = prompt
 	// NewData.tokenchannel = tokenchan
 	// NewData.tokenIDchannel = TokenIDChan
-	NewData.ResultChan = ResultChan
-	NewData.seed = seed
-	NewData.gamma = gamma
-	NewData.logitbias = logitBias
+	// NewData.ResultChan = ResultChan
+	// NewData.seed = seed
+	// NewData.gamma = gamma
+	// NewData.logitbias = logitBias
 
 	// seed := "i_am_a_llm"
-	seedC := C.CString(NewData.seed)
+	seedC := C.CString(Data.seed)
 	defer C.free(unsafe.Pointer(seedC))
 	history := C.llama_token_history_create()
-	NewData.history = history
-	NewData.historySize = historySize
+	Data.history = history
 
-	if dowatermark {
-		fmt.Println("Watermarking is enabled")
-		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_green_red(C.float(NewData.logitbias), C.float(NewData.gamma), seedC, history))
-		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_top_k(40))
-		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_dist(0))
-	} else {
-		fmt.Println("Watermarking is disabled")
-		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_top_k(40))
-		C.llama_sampler_chain_add(NewData.smpl, C.llama_sampler_init_dist(0))
+	nCtx := C.llama_n_ctx(Data.ctx)
+	Data.nctx = nCtx
+
+	// NewData.historySize = historySize
+	if Data.changeWaterMarkStatus {
+		if Data.enableWatermark {
+			fmt.Println("Watermarking is enabled")
+			C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_green_red(C.float(Data.logitbias), C.float(Data.gamma), seedC, history))
+			C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_top_k(40))
+			C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_dist(0))
+		} else {
+			fmt.Println("Watermarking is disabled")
+			C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_top_k(40))
+			C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_dist(0))
+		}
 	}
 
-	generationOver, err := RunConvo(NewData, true)
+	generationOver, err := RunConvo(Data, true)
 	if err != nil {
 		return false, fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -209,15 +224,15 @@ func Generate(prompt PromptData) (string, bool, error) {
 	gotokenhistory := promptTokens[start:]
 
 	var tokenhistoryPtr *C.llama_token
-	if len(gotokenhistory) > 0 {
-		tokenhistoryPtr = (*C.llama_token)(unsafe.Pointer(&gotokenhistory[0]))
-	}
-	prompt.tokenhistoryPtr = tokenhistoryPtr
+	// if len(gotokenhistory) > 0 {
+	// 	tokenhistoryPtr = (*C.llama_token)(unsafe.Pointer(&gotokenhistory[0]))
+	// }
+	// prompt.tokenhistoryPtr = tokenhistoryPtr
 
 	batch := C.llama_batch_get_one((*C.llama_token)(unsafe.Pointer(&promptTokens[0])), C.int32_t(len(promptTokens)))
 
 	var newTokenID C.llama_token
-	var nCtx C.uint32_t
+	// var nCtx C.uint32_t
 	var nCtxUsed C.llama_pos
 
 	prompt.totalGreenTokenCnt = 0
@@ -235,13 +250,16 @@ func Generate(prompt PromptData) (string, bool, error) {
 		// default:
 		// }
 		// Check context size
-		nCtx = C.llama_n_ctx(prompt.ctx)
+		// nCtx = C.llama_n_ctx(prompt.ctx)
 
 		nCtxUsed = C.llama_memory_seq_pos_max(C.llama_get_memory(prompt.ctx), 0) + 1
 
-		if C.uint32_t(nCtxUsed)+C.uint32_t(batch.n_tokens) > nCtx {
+		// prompt.nctx = nCtx
+		prompt.nctxUsed = nCtxUsed
+
+		if C.uint32_t(nCtxUsed)+C.uint32_t(batch.n_tokens) > prompt.nctx {
 			fmt.Print("\n\033[0m")
-			fmt.Println("Current nCtxUsed and nCtx is: ", int(nCtxUsed), nCtx)
+			fmt.Println("Current nCtxUsed and nCtx is: ", int(nCtxUsed), prompt.nctx)
 			return "", false, fmt.Errorf("context size exceeded")
 		}
 
@@ -277,11 +295,22 @@ func Generate(prompt PromptData) (string, bool, error) {
 		// Convert C buffer -> Go string
 		piece := C.GoStringN(&buf[0], n)
 		prompt.piece = piece
+		defaultTokenID := C.llama_token(10)
 
 		gotokenhistory = append(gotokenhistory, newTokenID)
 
 		if len(gotokenhistory) > prompt.historySize {
 			gotokenhistory = gotokenhistory[1:]
+		}else{
+			missing := prompt.historySize - len(gotokenhistory)
+
+			padding := make([]C.llama_token, missing)
+
+			for i := range padding {
+				padding[i] = defaultTokenID
+			}
+
+			gotokenhistory = append(padding, gotokenhistory...)
 		}
 
 		if len(gotokenhistory) > 0 {
@@ -309,7 +338,7 @@ func Generate(prompt PromptData) (string, bool, error) {
 		batch = C.llama_batch_get_one(&newTokenID, 1)
 	}
 
-	fmt.Println("Current nCtxUsed and nCtx is: ", int(nCtxUsed), nCtx)
+	fmt.Println("Current nCtxUsed and nCtx is: ", int(nCtxUsed), prompt.nctx)
 
 	return response, true, nil
 }
@@ -403,7 +432,7 @@ func RunConvo(prompt PromptData, websocket bool) (bool, error) {
 			return generationOver, fmt.Errorf("failed to apply chat template")
 		}
 
-		if generationOver{
+		if generationOver {
 			break
 		}
 	}

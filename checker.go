@@ -166,6 +166,8 @@ type TokenResult struct {
 	TotalCount      int
 	GreenPercentage float64
 	ZScore          float64
+	ContextUsed     int
+	TotalContext    int
 }
 
 func BasicGreenStreamPercentage(prompt PromptData) (int, int, float64) {
@@ -192,6 +194,8 @@ func BasicGreenStreamPercentage(prompt PromptData) (int, int, float64) {
 		TotalCount:      prompt.totalTokenCnt,
 		GreenPercentage: float64(prompt.totalGreenTokenCnt * 100 / prompt.totalTokenCnt),
 		ZScore:          prompt.CurrentZscore,
+		ContextUsed:     int(prompt.nctxUsed),
+		TotalContext:    int(prompt.nctx),
 	}
 
 	prompt.ResultChan <- result
@@ -277,6 +281,9 @@ func ProcessText(request ProcessRequest, data PromptData) (int, int, float64, er
 		}
 
 	}
+
+	// nCtx := C.llama_n_ctx(Data.ctx)
+	// Data.nctx = nCtx
 
 	expected := float64(data.totalTokenCnt) * request.Gamma
 	variance := float64(data.totalTokenCnt) * request.Gamma * (1.0 - request.Gamma)

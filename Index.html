@@ -5,25 +5,35 @@ async function run() {
         'input[name="mode"]:checked'
     ).value;
 
+    let sessionID = localStorage.getItem("session_id");
+
+    if (!sessionID) {
+        sessionID = crypto.randomUUID();
+        localStorage.setItem("session_id", sessionID);
+    }
+
     if (mode === "generate") {
         document.getElementById("result").textContent = "";
         document.getElementById("green_count").textContent = "0";
         document.getElementById("total_count").textContent = "0";
         document.getElementById("z_score").textContent = "0.00";
+        document.getElementById("tokens_spent").textContent = "";
+        document.getElementById("total_avaialble_tokens").textContent = "";
 
         // const ws = new WebSocket("ws://localhost:8080/ws");
 
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+        const ws = new WebSocket(`${protocol}//${window.location.host}/ws?session_id=${sessionID}`);
 
         ws.onopen = () => {
             ws.send(JSON.stringify({
                 type: "placeholder",
                 text: text,
                 watermark: document.getElementById("watermark").checked,
-                logit_bias: parseFloat(document.getElementById("logit_bias").value),
-                gamma: parseFloat(document.getElementById("gamma").value),
-                history_size: parseInt(document.getElementById("history").value)
+                logit_bias: parseFloat(document.getElementById("logit_bias").value) || 0,
+                gamma: parseFloat(document.getElementById("gamma").value) || 0,
+                history_size: parseInt(document.getElementById("history").value) || 0,
+                seed: document.getElementById("seed").value
             }));
         };
 
@@ -40,6 +50,8 @@ async function run() {
             document.getElementById("green_count").textContent = result.GreenCount;
             document.getElementById("total_count").textContent = result.TotalCount;
             document.getElementById("z_score").textContent = result.ZScore.toFixed(2);
+            document.getElementById("tokens_spent").textContent = result.ContextUsed;
+            document.getElementById("total_avaialble_tokens").textContent = result.TotalContext;
         };
 
         ws.onerror = (error) => {
@@ -56,6 +68,8 @@ async function run() {
         document.getElementById("green_count").textContent = "0";
         document.getElementById("total_count").textContent = "0";
         document.getElementById("z_score").textContent = "0.00";
+        document.getElementById("tokens_spent").textContent = "";
+        document.getElementById("total_avaialble_tokens").textContent = "";
         const response = await fetch("/process", {
             method: "POST",
             headers: {
@@ -64,12 +78,8 @@ async function run() {
             body: JSON.stringify({
                 text: text,
                 seed: document.getElementById("seed").value,
-                gamma: parseFloat(
-                    document.getElementById("gamma").value
-                ),
-                history_size: parseInt(
-                    document.getElementById("history").value
-                )
+                gamma: parseFloat(document.getElementById("gamma").value) || 0,
+                history_size: parseInt(document.getElementById("history").value) || 0
             })
         });
 
@@ -81,6 +91,8 @@ async function run() {
         document.getElementById("green_count").textContent = result.green_count;
         document.getElementById("total_count").textContent = result.total_count;
         document.getElementById("z_score").textContent = result.z_score.toFixed(2);
+        document.getElementById("tokens_spent").textContent = result.tokens_spent;
+        document.getElementById("total_avaialble_tokens").textContent = result.total_avaialble_tokens;
     }
 }
 </script>
@@ -103,11 +115,11 @@ async function run() {
 <label>Seed:</label>
 <input id="seed" value="i_am_a_llm">
 
+<label>History:</label>
+<input id="history" type="number" value="4" step="1">
+
 <label>Gamma:</label>
 <input id="gamma" type="number" value="0.6" step="0.1">
-
-<label>History:</label>
-<input id="history" type="number" value="4">
 
 <label>LogitBias:</label>
 <input id="logit_bias" type="number" value="4.0" step="0.1">
@@ -123,10 +135,21 @@ async function run() {
 
 <pre id="result"></pre>
 
+<script>
+document.getElementById("text").addEventListener("keydown", function(event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        run();
+    }
+});
+</script>
+
 <div id="stats">
     <span>Green: <b id="green_count">0</b></span>
     <span>Total: <b id="total_count">0</b></span>
     <span>Z-Score: <b id="z_score">0.00</b></span>
+    <span>Tokens_Spent: <b id="tokens_spent">0.00</b></span>
+    <span>Tokens_Available: <b id="total_avaialble_tokens">0.00</b></span>
 </div>
 
 <style>
@@ -155,5 +178,12 @@ async function run() {
         margin-top: 15px;
         margin-bottom: 10px;
         font-size: 16px;
+    }
+
+    button {
+        font-size: 20px;
+        padding: 12px 40px;
+        min-width: 150px;
+        cursor: pointer;
     }
 </style>
