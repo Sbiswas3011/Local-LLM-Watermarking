@@ -1,25 +1,44 @@
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
 <script>
+
+function makeID() {
+    if (window.crypto && crypto.randomUUID) {
+        return crypto.randomUUID();
+    }
+    return Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
+function getSessionID() {
+    let id = null;
+    try {
+        id = localStorage.getItem("session_id");
+    } catch (e) {}
+    if (!id) {
+        id = makeID();
+        try {
+            localStorage.setItem("session_id", id);
+        } catch (e) {}
+    }
+    return id;
+}
+
 async function run() {
     const text = document.getElementById("text").value;
     const mode = document.querySelector(
         'input[name="mode"]:checked'
     ).value;
+    document.getElementById("result").textContent = "";
+    document.getElementById("green_count").textContent = "0";
+    document.getElementById("total_count").textContent = "0";
+    document.getElementById("z_score").textContent = "0.00";
+    document.getElementById("tokens_spent").textContent = "";
+    document.getElementById("total_avaialble_tokens").textContent = "";
+    document.getElementById("total_per_sec").textContent = "0.00";
 
-    let sessionID = localStorage.getItem("session_id");
-
-    if (!sessionID) {
-        sessionID = crypto.randomUUID();
-        localStorage.setItem("session_id", sessionID);
-    }
+    const sessionID = getSessionID();
 
     if (mode === "generate") {
-        document.getElementById("result").textContent = "";
-        document.getElementById("green_count").textContent = "0";
-        document.getElementById("total_count").textContent = "0";
-        document.getElementById("z_score").textContent = "0.00";
-        document.getElementById("tokens_spent").textContent = "";
-        document.getElementById("total_avaialble_tokens").textContent = "";
-
         // const ws = new WebSocket("ws://localhost:8080/ws");
 
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -52,6 +71,7 @@ async function run() {
             document.getElementById("z_score").textContent = result.ZScore.toFixed(2);
             document.getElementById("tokens_spent").textContent = result.ContextUsed;
             document.getElementById("total_avaialble_tokens").textContent = result.TotalContext;
+            document.getElementById("total_per_sec").textContent = result.TokensPerSecond;
         };
 
         ws.onerror = (error) => {
@@ -64,12 +84,6 @@ async function run() {
     }
 
     if (mode === "watermark") {
-        document.getElementById("result").textContent = "";
-        document.getElementById("green_count").textContent = "0";
-        document.getElementById("total_count").textContent = "0";
-        document.getElementById("z_score").textContent = "0.00";
-        document.getElementById("tokens_spent").textContent = "";
-        document.getElementById("total_avaialble_tokens").textContent = "";
         const response = await fetch("/process", {
             method: "POST",
             headers: {
@@ -93,8 +107,29 @@ async function run() {
         document.getElementById("z_score").textContent = result.z_score.toFixed(2);
         document.getElementById("tokens_spent").textContent = result.tokens_spent;
         document.getElementById("total_avaialble_tokens").textContent = result.total_avaialble_tokens;
+        document.getElementById("total_per_sec").textContent = result.TokensPerSecond;
     }
 }
+
+async function reset() {
+    document.getElementById("result").textContent = "";
+    document.getElementById("green_count").textContent = "0";
+    document.getElementById("total_count").textContent = "0";
+    document.getElementById("z_score").textContent = "0.00";
+    document.getElementById("tokens_spent").textContent = "";
+    document.getElementById("total_avaialble_tokens").textContent = "";
+    document.getElementById("total_per_sec").textContent = "0.00";
+
+    const sessionID = getSessionID();
+
+    const response = await fetch(`/resetctx?session_id=${encodeURIComponent(sessionID)}`, {
+        method: "GET",
+    });
+
+    const result = await response.json();
+    document.getElementById("result").textContent += result.success;
+}
+
 </script>
 
 <textarea id="text"
@@ -132,6 +167,7 @@ async function run() {
 <br><br>
 
 <button onclick="run()">Run</button>
+<button onclick="reset()">Reset</button>
 
 <pre id="result"></pre>
 
@@ -150,6 +186,7 @@ document.getElementById("text").addEventListener("keydown", function(event) {
     <span>Z-Score: <b id="z_score">0.00</b></span>
     <span>Tokens_Spent: <b id="tokens_spent">0.00</b></span>
     <span>Tokens_Available: <b id="total_avaialble_tokens">0.00</b></span>
+    <span>Tokens/Sec: <b id="total_per_sec">0.00</b></span>
 </div>
 
 <style>

@@ -59,26 +59,23 @@ type Server struct {
 }
 
 type Session struct {
-	ID         string
-	Watermark  *bool
-	Ctx        *C.struct_llama_context
-	Smpl       *C.struct_llama_sampler
+	ID        string
+	Watermark *bool
+	Ctx       *C.struct_llama_context
+	Smpl      *C.struct_llama_sampler
 	// ResultChan chan TokenResult
 }
 
-func (s *Server) getOrCreateSession(id string) (*Session, error) {
+func (s *Server) getOrCreateSession(id string) (*Session, bool, error) {
 
-	// s.SessionsMu.RLock()
 	session, exists := s.Sessions[id]
-	// s.SessionsMu.RUnlock()
-
 	if exists {
-		return session, nil
+		return session, true, nil
 	}
 
 	ctx := C.llama_init_from_model(Model, Ctx_params)
 	if ctx == nil {
-		return nil, fmt.Errorf("Faild to create context")
+		return nil, false, fmt.Errorf("Faild to create context")
 	}
 
 	// smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
@@ -94,26 +91,9 @@ func (s *Server) getOrCreateSession(id string) (*Session, error) {
 		// ResultChan: make(chan TokenResult, 32),
 	}
 
-	// s.SessionsMu.Lock()
-
-	// Check again because another request could
-	// have created it while we were creating ours.
-	// existing, exists := s.Sessions[id]
-
-	// if exists {
-	//     s.SessionsMu.Unlock()
-
-	//     // Don't leak the context/sampler we just created.
-	//     C.llama_free(session.Ctx)
-	//     C.llama_sampler_free(session.Smpl)
-
-	//     return existing
-	// }
-
 	s.Sessions[id] = session
-	// s.SessionsMu.Unlock()
 
-	return session, nil
+	return session, false, nil
 }
 
 func main() {
@@ -133,12 +113,45 @@ func main() {
 	router.GET("/", func(c *gin.Context) { c.File("./index.html") })
 	router.GET("/ws", server.websocketHandler)
 	router.POST("/process", server.processTextHandler)
+	router.GET("/resetctx", server.resetContext)
 
 	router.Run(":8080")
 }
 
-func (s *Server) websocketHandler(c *gin.Context) {
+func (s *Server) resetContext(c *gin.Context) {
 
+	sessionID := c.Query("session_id")
+	session, lookupExists, err := s.getOrCreateSession(sessionID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Failed to Create Session",
+		})
+		return
+	}
+
+	if lookupExists {
+		newctx := C.llama_init_from_model(Model, Ctx_params)
+		if newctx == nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Failed to Create Context",
+			})
+			return
+		}
+		session.Ctx = newctx
+
+		c.JSON(http.StatusOK, gin.H{
+			"success": "Context Was Reset",
+		})
+
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": "New Context Was Created",
+	})
+}
+
+func (s *Server) websocketHandler(c *gin.Context) {
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -147,7 +160,7 @@ func (s *Server) websocketHandler(c *gin.Context) {
 	defer conn.Close()
 
 	sessionID := c.Query("session_id")
-	session, err := s.getOrCreateSession(sessionID)
+	session, _, err := s.getOrCreateSession(sessionID)
 	if err != nil || session == nil {
 		println("Failed to Create Session")
 		return
@@ -332,10 +345,10 @@ func (s *Server) processTextHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"total_count": totalCnt,
-		"green_count": totalGreenCnt,
-		"z_score":     zscore,
-		"tokens_spent": "invalid",
+		"total_count":            totalCnt,
+		"green_count":            totalGreenCnt,
+		"z_score":                zscore,
+		"tokens_spent":           "invalid",
 		"total_avaialble_tokens": "invalid",
 	})
 }

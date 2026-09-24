@@ -22,6 +22,7 @@ import "C"
 import (
 	"fmt"
 	"math"
+	"time"
 	"unsafe"
 )
 
@@ -168,35 +169,55 @@ type TokenResult struct {
 	ZScore          float64
 	ContextUsed     int
 	TotalContext    int
+	IsGreen         bool
+	TokensPerSecond float64
 }
 
-func BasicGreenStreamPercentage(prompt PromptData) (int, int, float64) {
+func BasicGreenStreamPercentage(prompt PromptData, startTime time.Time) (int, int, float64) {
 
 	isGreen := false
 	seedC := C.CString(prompt.seed)
 	defer C.free(unsafe.Pointer(seedC))
 
+	// fmt.Println("Data Logs Before Sampler: ", Data.logitbias, Data.gamma, Data.seed, Data.history)
+
+	result := TokenResult{}
+
 	isGreen = bool(C.llama_sampler_check_basic_watermarkv2(prompt.newTokenID, C.float(prompt.gamma), seedC, prompt.tokenhistoryPtr, C.size_t(prompt.historySize), C.int32_t(prompt.n_vocab)))
 
 	if isGreen {
 		prompt.totalGreenTokenCnt++
+		result.IsGreen = true
 	}
 
 	prompt.totalTokenCnt++
+
+	elapsedTime := time.Since(startTime).Seconds()
+
+	tokensPerSecond := float64(prompt.totalTokenCnt) / elapsedTime
 
 	expected := float64(prompt.totalTokenCnt) * prompt.gamma
 	variance := float64(prompt.totalTokenCnt) * prompt.gamma * (1.0 - prompt.gamma)
 	prompt.CurrentZscore = (float64(prompt.totalGreenTokenCnt) - expected) / math.Sqrt(variance)
 
-	result := TokenResult{
-		Token:           prompt.piece,
-		GreenCount:      prompt.totalGreenTokenCnt,
-		TotalCount:      prompt.totalTokenCnt,
-		GreenPercentage: float64(prompt.totalGreenTokenCnt * 100 / prompt.totalTokenCnt),
-		ZScore:          prompt.CurrentZscore,
-		ContextUsed:     int(prompt.nctxUsed),
-		TotalContext:    int(prompt.nctx),
-	}
+	result.Token = prompt.piece
+	result.GreenCount = prompt.totalGreenTokenCnt
+	result.TotalCount = prompt.totalTokenCnt
+	result.GreenPercentage = float64(prompt.totalGreenTokenCnt * 100 / prompt.totalTokenCnt)
+	result.ZScore = prompt.CurrentZscore
+	result.ContextUsed = int(prompt.nctxUsed)
+	result.TotalContext = int(prompt.nctx)
+	result.TokensPerSecond = tokensPerSecond
+
+	// result := TokenResult{
+	// 	Token:           prompt.piece,
+	// 	GreenCount:      prompt.totalGreenTokenCnt,
+	// 	TotalCount:      prompt.totalTokenCnt,
+	// 	GreenPercentage: float64(prompt.totalGreenTokenCnt * 100 / prompt.totalTokenCnt),
+	// 	ZScore:          prompt.CurrentZscore,
+	// 	ContextUsed:     int(prompt.nctxUsed),
+	// 	TotalContext:    int(prompt.nctx),
+	// }
 
 	prompt.ResultChan <- result
 	// prompt.CloseResultChan <- true

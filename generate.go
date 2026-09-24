@@ -22,6 +22,7 @@ import "C"
 import (
 	"bufio"
 	"fmt"
+	"time"
 
 	// wm "main/watermarking"
 	"os"
@@ -66,6 +67,7 @@ type PromptData struct {
 
 var Model *C.struct_llama_model
 var Ctx_params C.struct_llama_context_params
+
 // var Smpl *C.struct_llama_sampler
 
 func InitModel() (PromptData, error) {
@@ -120,8 +122,8 @@ func InitModel() (PromptData, error) {
 		vocab:           vocab,
 		ctx:             ctx,
 		// smpl:            smpl,
-		model:           model,
-		n_vocab:         int(n_vocab),
+		model:   model,
+		n_vocab: int(n_vocab),
 		// tokenchannel:    TokenChan,
 		// tokenIDchannel:  TokenIDChan,
 		// ResultChan:      ResultChan,
@@ -161,10 +163,12 @@ func StartGenerationwithParams(Data PromptData) (bool, error) {
 	nCtx := C.llama_n_ctx(Data.ctx)
 	Data.nctx = nCtx
 
+	// fmt.Println("Data Logs Before Sampler: ", Data.logitbias, Data.gamma, Data.seed, Data.history)
 	// NewData.historySize = historySize
 	if Data.changeWaterMarkStatus {
 		if Data.enableWatermark {
 			fmt.Println("Watermarking is enabled")
+			fmt.Println("Data Logs Before Sampler: ", Data.logitbias, Data.gamma, Data.seed, Data.history)
 			C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_green_red(C.float(Data.logitbias), C.float(Data.gamma), seedC, history))
 			C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_top_k(40))
 			C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_dist(0))
@@ -223,11 +227,16 @@ func Generate(prompt PromptData) (string, bool, error) {
 
 	gotokenhistory := promptTokens[start:]
 
+	for _, token := range gotokenhistory {
+		fmt.Printf("Adding to prompt.history: %d\n", token)
+		C.llama_token_history_add(prompt.history, token)
+	}
+
 	var tokenhistoryPtr *C.llama_token
-	// if len(gotokenhistory) > 0 {
-	// 	tokenhistoryPtr = (*C.llama_token)(unsafe.Pointer(&gotokenhistory[0]))
-	// }
-	// prompt.tokenhistoryPtr = tokenhistoryPtr
+	if len(gotokenhistory) > 0 {
+		tokenhistoryPtr = (*C.llama_token)(unsafe.Pointer(&gotokenhistory[0]))
+	}
+	prompt.tokenhistoryPtr = tokenhistoryPtr
 
 	batch := C.llama_batch_get_one((*C.llama_token)(unsafe.Pointer(&promptTokens[0])), C.int32_t(len(promptTokens)))
 
@@ -251,6 +260,8 @@ func Generate(prompt PromptData) (string, bool, error) {
 		// }
 		// Check context size
 		// nCtx = C.llama_n_ctx(prompt.ctx)
+
+		startTime := time.Now()
 
 		nCtxUsed = C.llama_memory_seq_pos_max(C.llama_get_memory(prompt.ctx), 0) + 1
 
@@ -297,11 +308,13 @@ func Generate(prompt PromptData) (string, bool, error) {
 		prompt.piece = piece
 		defaultTokenID := C.llama_token(10)
 
+		prompt.totalTokenCnt, prompt.totalGreenTokenCnt, prompt.CurrentZscore = BasicGreenStreamPercentage(prompt, startTime)
+
 		gotokenhistory = append(gotokenhistory, newTokenID)
 
-		if len(gotokenhistory) > prompt.historySize {
+		if len(gotokenhistory) >= prompt.historySize {
 			gotokenhistory = gotokenhistory[1:]
-		}else{
+		} else {
 			missing := prompt.historySize - len(gotokenhistory)
 
 			padding := make([]C.llama_token, missing)
@@ -318,7 +331,7 @@ func Generate(prompt PromptData) (string, bool, error) {
 		}
 		prompt.tokenhistoryPtr = tokenhistoryPtr
 
-		prompt.totalTokenCnt, prompt.totalGreenTokenCnt, prompt.CurrentZscore = BasicGreenStreamPercentage(prompt)
+		// fmt.Println("gotokenhistory: ",gotokenhistory)
 
 		// fmt.Print(piece)
 		// TokenChan <- piece
