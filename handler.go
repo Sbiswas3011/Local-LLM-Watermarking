@@ -368,3 +368,6 @@ func (s *Server) processTextHandler(c *gin.Context) {
 // for non watermaring ignore variables sent
 //handle context exceeded
 //handle tokenhistory sampling
+//check if reset contxt breaks sampler,
+//handle canclel and multi request
+//add padding handling in manual checker
