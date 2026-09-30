@@ -1,6 +1,6 @@
-
 import { useRef, useState } from "react";
 import "./TextBox.css";
+import Settings from "./Settings.jsx";
 
 function makeID() {
   if (window.crypto?.randomUUID) {
@@ -16,7 +16,7 @@ function getSessionID() {
   try {
     id = localStorage.getItem("session_id");
   } catch (e) {
-    console.log("localStorage Unavailable to Get")
+    console.log("localStorage Unavailable to Get");
   }
 
   if (!id) {
@@ -25,7 +25,7 @@ function getSessionID() {
     try {
       localStorage.setItem("session_id", id);
     } catch (e) {
-      console.log("localStorage Unavailable to Set")
+      console.log("localStorage Unavailable to Set");
     }
   }
 
@@ -33,12 +33,25 @@ function getSessionID() {
 }
 
 function TextBox() {
-
   const [text, setText] = useState("");
   const [messages, setMessages] = useState([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const thinkingRef = useRef(false);
+  const [page, setPage] = useState("chat");
+  const [stats, setStats] = useState({
+    zScore: 0,
+    contextUsed: 0,
+    totalContext: 0,
+  });
+
+  const [settings, setSettings] = useState({
+    watermark: false,
+    logit_bias: 4.0,
+    gamma: 0.6,
+    history_size: 4,
+    seed: "i_am_a_llm",
+  });
 
   const handleChange = (event) => setText(event.target.value);
 
@@ -57,16 +70,15 @@ function TextBox() {
     // Add the user's message and an empty assistant message.
     setMessages((previous) => [
       ...previous,
-      { role: "user", content: prompt, thinking: "", showThinking: false},
-      { role: "assistant", content: "", thinking: "", showThinking: false},
+      { role: "user", content: prompt },
+      { role: "assistant", content: [], thinking: [], showThinking: false },
     ]);
 
-    const protocol =
-      window.location.protocol === "https:" ? "wss:" : "ws:";
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 
     const sessionID = getSessionID();
 
-    const wsUrl = `${protocol}//localhost:8080/ws?session_id=${sessionID}`
+    const wsUrl = `${protocol}//localhost:8080/ws?session_id=${sessionID}`;
 
     console.log("Connecting to:", wsUrl);
 
@@ -77,48 +89,61 @@ function TextBox() {
         JSON.stringify({
           type: "placeholder",
           text: prompt,
-          watermark: false,
-          logit_bias: 4.0,
-          gamma: 0.6,
-          history_size: 4,
-          seed: "i_am_a_llm",
-        })
+          watermark: settings.watermark,
+          logit_bias: settings.logit_bias,
+          gamma: settings.gamma,
+          history_size: settings.history_size,
+          seed: settings.seed,
+        }),
       );
     };
 
     ws.onmessage = (event) => {
       const result = JSON.parse(event.data);
       const token = result.Token;
+      const isGreen = result.IsGreen;
 
       if (token.includes("<think>")) {
-        console.log("Setting True")
+        // console.log("Setting True")
         thinkingRef.current = true;
         setIsThinking(true);
         return;
       }
 
       if (token.includes("</think>")) {
-        console.log("Setting False")
-        thinkingRef.current = false
+        // console.log("Setting False")
+        thinkingRef.current = false;
         setIsThinking(false);
         return;
       }
 
-      console.log("iThinking, token:", isThinking, token)
+      console.log("iThinking, token:", isThinking, token);
+
+      setStats({
+        zScore: result.ZScore,
+        contextUsed: result.ContextUsed,
+        totalContext: result.TotalContext,
+      });
 
       setMessages((previous) => {
         const updated = [...previous];
         const lastIndex = updated.length - 1;
 
-        if (thinkingRef.current){
+        if (thinkingRef.current) {
           updated[lastIndex] = {
             ...updated[lastIndex],
-            thinking: updated[lastIndex].thinking + result.Token,
+            thinking: [
+              ...updated[lastIndex].thinking,
+              { text: token, isGreen: isGreen },
+            ],
           };
-        }else{
+        } else {
           updated[lastIndex] = {
             ...updated[lastIndex],
-            content: updated[lastIndex].content + result.Token,
+            content: [
+              ...updated[lastIndex].content,
+              { text: token, isGreen: isGreen },
+            ],
           };
         }
 
@@ -155,14 +180,22 @@ function TextBox() {
   return (
     <div className="app">
       <main className="chat">
-
-        {/* <header className="chat-header">
-          <h1>Local LLM (Swift-Qwen3.8-27B-Q4_K_M)</h1>
-        </header> */}
+        {messages.length > 0 && (
+          <div className="chat-header">
+            <h1>Local LLM (Swift-Qwen3.8-27B-Q4_K_M)</h1>
+          </div>
+        )}
 
         <div className={`thinking-indicator ${isThinking ? "thinking" : ""}`}>
           <span className="thinking-dot"></span>
-            Generating Think Tokens
+          Generating Think Tokens
+        </div>
+
+        <div className="generation-stats">
+          <div>
+            Context: {stats.contextUsed} / {stats.totalContext}
+          </div>
+          <div>Z-Score: {Number(stats.zScore).toFixed(2)}</div>
         </div>
 
         <div className="messages">
@@ -174,55 +207,73 @@ function TextBox() {
           )}
 
           {messages.map((message, index) => (
-            <div
-              key={index}
-              className={`message ${message.role}`}
-            >
+            <div key={index} className={`message ${message.role}`}>
+              {message.role === "user" && message.content}
 
-               {message.role === "user" && (
-                  message.content
-                )}
-
-                {message.role === "assistant" && (
+              {message.role === "assistant" && (
                 <>
                   <div className="assistant-content">
-                    {message.content}
+                    {message.content.map((item, index) => (
+                      <span
+                        key={index}
+                        style={{ color: item.isGreen ? "green" : "red" }}
+                      >
+                        {item.text}
+                      </span>
+                    ))}
                   </div>
-                
-                <button
-                      className="thinking-toggle"
-                      onClick={() => {
-                        setMessages((previous) => {
-                          const updated = [...previous];
 
-                          updated[index] = {
-                            ...updated[index],
-                            showThinking: !updated[index].showThinking,
-                          };
+                  <button
+                    className="thinking-toggle"
+                    onClick={() => {
+                      setMessages((previous) => {
+                        const updated = [...previous];
 
-                          return updated;
-                        });
-                      }}
-                    >
-                      Show Thinking {message.showThinking ? "▲" : "▼"}
-                </button>
+                        updated[index] = {
+                          ...updated[index],
+                          showThinking: !updated[index].showThinking,
+                        };
 
-                {message.thinking && (
-                  <>
-                    {message.showThinking && (
-                      <div className="thinking-box">
-                        {message.thinking}
-                      </div>
-                    )}
-                  </>
-                )}
-                </ >
-                )}
+                        return updated;
+                      });
+                    }}
+                  >
+                    Show Thinking {message.showThinking ? "▲" : "▼"}
+                  </button>
+
+                  {message.thinking && (
+                    <>
+                      {message.showThinking && (
+                        <div className="thinking-box">
+                          {message.thinking.map((item, index) => (
+                            <span
+                              key={index}
+                              style={{
+                                color: item.isGreen ? "green" : "red",
+                              }}
+                            >
+                              {item.text}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
             </div>
           ))}
         </div>
 
         <form className="composer" onSubmit={handleSubmit}>
+          <button
+            className="settings-button"
+            type="button"
+            onClick={() => setPage(page === "settings" ? "chat" : "settings")}
+          >
+            <span className="setting-gear">⚙️</span>
+          </button>
+
           <textarea
             value={text}
             onChange={handleChange}
@@ -242,6 +293,7 @@ function TextBox() {
           />
 
           <button
+            className="send-button"
             type="submit"
             disabled={isGenerating || !text.trim()}
             aria-label="Send message"
@@ -250,6 +302,14 @@ function TextBox() {
           </button>
         </form>
       </main>
+
+      {page === "settings" && (
+        <Settings
+          settings={settings}
+          setSettings={setSettings}
+          setPage={setPage}
+        />
+      )}
     </div>
   );
 }

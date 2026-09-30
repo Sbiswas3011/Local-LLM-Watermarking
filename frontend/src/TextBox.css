@@ -1,6 +1,11 @@
-
 * {
   box-sizing: border-box;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 body {
@@ -31,7 +36,9 @@ body {
 
 .messages {
   flex: 1;
-  padding-top: 20vh;
+  /* padding-top: 20vh; */
+  min-height: 0;
+  margin-top: 20px;
   text-align: center;
   overflow-y: auto;
 }
@@ -67,6 +74,7 @@ body {
   background: transparent;
   color: white;
   font: inherit;
+  font-size: 25px;
 }
 
 .composer textarea::placeholder {
@@ -74,30 +82,52 @@ body {
 }
 
 .composer button {
-  width: 40px;
-  height: 40px;
+  width: 50px;
+  height: 50px;
   flex-shrink: 0;
   border: none;
   border-radius: 50%;
-  background: white;
+  background: rgba(255, 255, 255, 0.8);
   color: #212121;
   font-size: 24px;
   cursor: pointer;
+  position: relative;
+  top: -2px;
+}
+
+.composer .settings-button {
+  background: rgba(255, 255, 255, 0.2);
+  font-size: 28px;
+}
+
+.composer button:hover {
+  color: #555;
 }
 
 .send-arrow {
-  font-size: 28px;
+  font-size: 38px;
   position: relative;
-  top: -3px;
+  top: -5px;
   left: 1px;
 }
 
+.setting-gear {
+  display: inline-block;
+  position: relative;
+  top: -1px;
+}
+
+/* .composer .settings-button:hover .setting-gear {
+  animation: spin 2s linear infinite;
+} */
+
 .thinking-indicator {
   position: absolute;
-  top: 20px;
+  top: 23px;
   right: 10px;
+  /* width: 145px;  */
 
-  padding: 8px 14px;
+  padding: 8px 8px;
   border-radius: 10px;
 
   background: #e5e5e5;
@@ -110,7 +140,21 @@ body {
   font-size: 14px;
   font-weight: 500;
 
-  transition: all 0.3s ease;
+  transition: all 0.1s ease;
+}
+
+.generation-stats {
+  position: absolute;
+  top: 80px;
+  right: 10px;
+
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  font-size: 20px;
+  color: #888;
+  text-align: right;
 }
 
 .thinking-dot {
@@ -137,10 +181,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-.messages.empty {
-  padding-top: 20vh;
 }
 
 .message {
@@ -209,13 +249,25 @@ body {
 }
 
 .chat-header {
-  flex-shrink: 0;
-  padding: 8px 0 16px;
-  text-align: center;
-  border-bottom: 1px solid #454545; /* optional divider */
+  /* flex-shrink: 0; */
+  padding: 15px 20px;
 }
 
 .chat-header h1 {
   margin: 0;
-  font-size: 1.25rem; /* smaller than a hero title, tweak to taste */
+  font-size: 30px;
+}
+
+.green-token {
+  color: green;
+}
+
+.red-token {
+  color: red;
+}
+
+.settings-panel {
+  position: absolute;
+  top: 60px;
+  right: 20px;
 }

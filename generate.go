@@ -23,6 +23,7 @@ import (
 	"bufio"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	// wm "main/watermarking"
 	"os"
@@ -246,6 +247,7 @@ func Generate(prompt PromptData) (string, bool, error) {
 
 	prompt.totalGreenTokenCnt = 0
 	prompt.totalTokenCnt = 0
+	var pending []byte
 
 	for {
 
@@ -303,13 +305,31 @@ func Generate(prompt PromptData) (string, bool, error) {
 			return "", false, fmt.Errorf("failed to convert token to piece")
 		}
 
-		// Convert C buffer -> Go string
-		piece := C.GoStringN(&buf[0], n)
-		print(piece)
-		prompt.piece = piece
-		defaultTokenID := C.llama_token(10)
+		pieceBytes := C.GoBytes(unsafe.Pointer(&buf[0]),n)
 
-		prompt.totalTokenCnt, prompt.totalGreenTokenCnt, prompt.CurrentZscore = BasicGreenStreamPercentage(prompt, startTime)
+		pending = append(pending, pieceBytes...)
+
+		if utf8.Valid(pending) {
+			piece := string(pending)
+			prompt.piece = piece
+			response += piece
+
+			prompt.totalTokenCnt, prompt.totalGreenTokenCnt, prompt.CurrentZscore = BasicGreenStreamPercentage(prompt, startTime)
+			fmt.Print(piece)
+
+			pending = pending[:0]
+		}
+
+		// Convert C buffer -> Go string
+		// piece := C.GoStringN(&buf[0], n)
+		// print(piece)
+		// fmt.Printf("PIECE: %q\n", piece)
+		// fmt.Printf("BYTES: % X\n", []byte(piece))
+		// prompt.piece = piece
+
+		// prompt.totalTokenCnt, prompt.totalGreenTokenCnt, prompt.CurrentZscore = BasicGreenStreamPercentage(prompt, startTime)
+
+		defaultTokenID := C.llama_token(10)
 
 		gotokenhistory = append(gotokenhistory, newTokenID)
 
@@ -336,7 +356,7 @@ func Generate(prompt PromptData) (string, bool, error) {
 
 		// fmt.Print(piece)
 		// TokenChan <- piece
-		response += piece
+		// response += piece
 
 		// _, err = file.WriteString(piece)
 		// if err != nil {

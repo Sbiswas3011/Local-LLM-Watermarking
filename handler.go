@@ -118,6 +118,7 @@ func main() {
 	router.Run(":8080")
 }
 
+//not yet tested
 func (s *Server) resetContext(c *gin.Context) {
 
 	sessionID := c.Query("session_id")
@@ -160,6 +161,7 @@ func (s *Server) websocketHandler(c *gin.Context) {
 	defer conn.Close()
 
 	sessionID := c.Query("session_id")
+	fmt.Println("sessionID", sessionID)
 	session, _, err := s.getOrCreateSession(sessionID)
 	if err != nil || session == nil {
 		println("Failed to Create Session")
