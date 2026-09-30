@@ -188,6 +188,8 @@ func BasicGreenStreamPercentage(prompt PromptData, startTime time.Time) (int, in
 	if isGreen {
 		prompt.totalGreenTokenCnt++
 		result.IsGreen = true
+	}else{
+		result.IsGreen = false
 	}
 
 	prompt.totalTokenCnt++

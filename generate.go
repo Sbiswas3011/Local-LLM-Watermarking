@@ -305,6 +305,7 @@ func Generate(prompt PromptData) (string, bool, error) {
 
 		// Convert C buffer -> Go string
 		piece := C.GoStringN(&buf[0], n)
+		print(piece)
 		prompt.piece = piece
 		defaultTokenID := C.llama_token(10)
 
