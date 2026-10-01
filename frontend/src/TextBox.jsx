@@ -32,6 +32,7 @@ function getSessionID() {
   return id;
 }
 
+
 function TextBox() {
   const [text, setText] = useState("");
   const [messages, setMessages] = useState([]);
@@ -53,10 +54,12 @@ function TextBox() {
     seed: "i_am_a_llm",
   });
 
+  const API_HOST = `${window.location.hostname}:8080`;
+
   useEffect(() => {
     const sessionID = getSessionID();
 
-    fetch(`http://localhost:8080/getsession?session_id=${sessionID}`)
+    fetch(`http://${API_HOST}/getsession?session_id=${sessionID}`)
       .then((response) => {
         if (!response.ok) {
           throw new Error("Failed to get session");
@@ -135,7 +138,7 @@ function TextBox() {
 
     const sessionID = getSessionID();
 
-    const wsUrl = `${protocol}//localhost:8080/ws?session_id=${sessionID}`;
+    const wsUrl = `${protocol}//${API_HOST}/ws?session_id=${sessionID}`;
 
     console.log("Connecting to:", wsUrl);
 
@@ -240,7 +243,7 @@ function TextBox() {
     const sessionID = getSessionID();
 
     try {
-      await fetch(`http://localhost:8080/closechan?session_id=${sessionID}`);
+      await fetch(`http://${API_HOST}/closechan?session_id=${sessionID}`);
     } catch (error) {
       console.error("Failed to stop generation:", error);
     }
