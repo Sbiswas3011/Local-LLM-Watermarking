@@ -171,6 +171,7 @@ type TokenResult struct {
 	TotalContext    int
 	IsGreen         bool
 	TokensPerSecond float64
+	Watermarked     bool
 }
 
 func BasicGreenStreamPercentage(prompt PromptData, startTime time.Time) (int, int, float64, TokenResult, bool) {
@@ -192,7 +193,7 @@ func BasicGreenStreamPercentage(prompt PromptData, startTime time.Time) (int, in
 	if isGreen {
 		prompt.totalGreenTokenCnt++
 		result.IsGreen = true
-	}else{
+	} else {
 		result.IsGreen = false
 	}
 
@@ -219,6 +220,7 @@ func BasicGreenStreamPercentage(prompt PromptData, startTime time.Time) (int, in
 	result.ContextUsed = int(prompt.nctxUsed)
 	result.TotalContext = int(prompt.nctx)
 	result.TokensPerSecond = tokensPerSecond
+	result.Watermarked = prompt.enableWatermark
 
 	select {
 	case <-prompt.CloseResultChan:

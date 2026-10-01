@@ -192,7 +192,7 @@ function TextBox() {
             ...updated[lastIndex],
             thinking: [
               ...updated[lastIndex].thinking,
-              { text: token, isGreen: isGreen },
+              { text: token, isGreen: isGreen, watermarked: result.Watermarked },
             ],
           };
         } else {
@@ -200,7 +200,7 @@ function TextBox() {
             ...updated[lastIndex],
             content: [
               ...updated[lastIndex].content,
-              { text: token, isGreen: isGreen },
+              { text: token, isGreen: isGreen, watermarked: result.Watermarked },
             ],
           };
         }
@@ -287,7 +287,7 @@ function TextBox() {
                         key={index}
                         // style={{ color: item.isGreen ? "green" : "red" }}
                         style={
-                                (message.watermarked ?? settings.watermark)
+                                (message.watermarked ?? item.watermarked)
                                   ? { color: item.isGreen ? "green" : "red" }
                                   : {}
                               }
@@ -326,7 +326,7 @@ function TextBox() {
                               //   color: item.isGreen ? "green" : "red",
                               // }}
                               style={
-                                (message.watermarked ?? settings.watermark)
+                                (message.watermarked ?? item.watermarked)
                                   ? { color: item.isGreen ? "green" : "red" }
                                   : {}
                               }

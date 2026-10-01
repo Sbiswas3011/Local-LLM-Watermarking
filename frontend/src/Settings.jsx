@@ -4,6 +4,7 @@ function Settings({ settings, setSettings, setPage, sessionID }) {
   const resetContext = async () => {
     try {
       await fetch(`http://localhost:8080/resetctx?session_id=${sessionID}`);
+      setPage("chat")
     } catch (error) {
       console.error("Failed to reset context:", error);
     }
