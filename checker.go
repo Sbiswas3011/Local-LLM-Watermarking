@@ -173,7 +173,7 @@ type TokenResult struct {
 	TokensPerSecond float64
 }
 
-func BasicGreenStreamPercentage(prompt PromptData, startTime time.Time) (int, int, float64) {
+func BasicGreenStreamPercentage(prompt PromptData, startTime time.Time) (int, int, float64, TokenResult, bool) {
 
 	isGreen := false
 	seedC := C.CString(prompt.seed)
@@ -183,7 +183,11 @@ func BasicGreenStreamPercentage(prompt PromptData, startTime time.Time) (int, in
 
 	result := TokenResult{}
 
+	// fmt.Println("reached before cgo")
+
 	isGreen = bool(C.llama_sampler_check_basic_watermarkv2(prompt.newTokenID, C.float(prompt.gamma), seedC, prompt.tokenhistoryPtr, C.size_t(prompt.historySize), C.int32_t(prompt.n_vocab)))
+
+	// fmt.Println("reached after cgo: ", isGreen, prompt.newTokenID, prompt.gamma, prompt.seed, prompt.historySize, prompt.n_vocab)
 
 	if isGreen {
 		prompt.totalGreenTokenCnt++
@@ -200,31 +204,31 @@ func BasicGreenStreamPercentage(prompt PromptData, startTime time.Time) (int, in
 
 	expected := float64(prompt.totalTokenCnt) * prompt.gamma
 	variance := float64(prompt.totalTokenCnt) * prompt.gamma * (1.0 - prompt.gamma)
-	prompt.CurrentZscore = (float64(prompt.totalGreenTokenCnt) - expected) / math.Sqrt(variance)
+	if variance > 0 {
+		prompt.CurrentZscore = (float64(prompt.totalGreenTokenCnt) - expected) / math.Sqrt(variance)
+	} else {
+		prompt.CurrentZscore = 0
+	}
+	// prompt.CurrentZscore = (float64(prompt.totalGreenTokenCnt) - expected) / math.Sqrt(variance)
 
 	result.Token = prompt.piece
-	result.GreenCount = prompt.totalGreenTokenCnt
-	result.TotalCount = prompt.totalTokenCnt
+	// result.GreenCount = prompt.totalGreenTokenCnt
+	// result.TotalCount = prompt.totalTokenCnt
 	result.GreenPercentage = float64(prompt.totalGreenTokenCnt * 100 / prompt.totalTokenCnt)
 	result.ZScore = prompt.CurrentZscore
 	result.ContextUsed = int(prompt.nctxUsed)
 	result.TotalContext = int(prompt.nctx)
 	result.TokensPerSecond = tokensPerSecond
 
-	// result := TokenResult{
-	// 	Token:           prompt.piece,
-	// 	GreenCount:      prompt.totalGreenTokenCnt,
-	// 	TotalCount:      prompt.totalTokenCnt,
-	// 	GreenPercentage: float64(prompt.totalGreenTokenCnt * 100 / prompt.totalTokenCnt),
-	// 	ZScore:          prompt.CurrentZscore,
-	// 	ContextUsed:     int(prompt.nctxUsed),
-	// 	TotalContext:    int(prompt.nctx),
-	// }
+	select {
+	case <-prompt.CloseResultChan:
+		return -1, -1, 0.0, result, true
 
-	prompt.ResultChan <- result
-	// prompt.CloseResultChan <- true
+	case prompt.ResultChan <- result:
+		// fmt.Println("returning to channel", result.Token, result.IsGreen, result.GreenPercentage, result.ZScore, result.ContextUsed, result.TotalContext, result.TokensPerSecond)
+	}
 
-	return prompt.totalTokenCnt, prompt.totalGreenTokenCnt, prompt.CurrentZscore
+	return prompt.totalTokenCnt, prompt.totalGreenTokenCnt, prompt.CurrentZscore, result, false
 }
 
 func ProcessText(request ProcessRequest, data PromptData) (int, int, float64, error) {

@@ -1,6 +1,23 @@
 import "./Settings.css";
 
-function Settings({ settings, setSettings, setPage }) {
+function Settings({ settings, setSettings, setPage, sessionID }) {
+  const resetContext = async () => {
+    try {
+      await fetch(`http://localhost:8080/resetctx?session_id=${sessionID}`);
+    } catch (error) {
+      console.error("Failed to reset context:", error);
+    }
+  };
+
+  const resetMessages = async () => {
+    try {
+      await fetch(`http://localhost:8080/resetmsgs?session_id=${sessionID}`);
+
+      window.location.reload();
+    } catch (error) {
+      console.error("Failed to reset messages:", error);
+    }
+  };
   return (
     <div className="settings-overlay">
       <div className="settings">
@@ -31,6 +48,7 @@ function Settings({ settings, setSettings, setPage }) {
             type="number"
             step="0.1"
             value={settings.logit_bias}
+            onFocus={(e) => e.target.select()}
             onChange={(e) =>
               setSettings({
                 ...settings,
@@ -46,6 +64,7 @@ function Settings({ settings, setSettings, setPage }) {
             type="number"
             step="0.05"
             value={settings.gamma}
+            onFocus={(e) => e.target.select()}
             onChange={(e) =>
               setSettings({
                 ...settings,
@@ -61,6 +80,7 @@ function Settings({ settings, setSettings, setPage }) {
             type="number"
             min="0"
             value={settings.history_size}
+            onFocus={(e) => e.target.select()}
             onChange={(e) =>
               setSettings({
                 ...settings,
@@ -83,6 +103,13 @@ function Settings({ settings, setSettings, setPage }) {
             }
           />
         </label>
+        <button type="button" onClick={resetContext}>
+          Reset Context
+        </button>
+
+        <button type="button" onClick={resetMessages}>
+          Clear Screen
+        </button>
       </div>
     </div>
   );

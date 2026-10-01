@@ -27,37 +27,35 @@ import (
 
 	// wm "main/watermarking"
 	"os"
-	"strings"
 	"unsafe"
 )
 
 var ModelPath string
 
 type PromptData struct {
-	prompt                string
-	enableWatermark       bool
-	vocab                 *C.struct_llama_vocab
-	ctx                   *C.struct_llama_context
-	smpl                  *C.struct_llama_sampler
-	model                 *C.struct_llama_model
-	ResultChan            chan TokenResult
-	history               unsafe.Pointer
-	historySize           int
-	n_vocab               int
-	gamma                 float64
-	logitbias             float64
-	seed                  string
-	newTokenID            C.llama_token
-	piece                 string
-	tokenhistoryPtr       *C.llama_token
-	totalTokenCnt         int
-	totalGreenTokenCnt    int
-	CurrentZscore         float64
-	changeWaterMarkStatus bool
-	nctx                  C.uint32_t
-	nctxUsed              C.llama_pos
-	// tokenchannel    chan string
-	// tokenIDchannel  chan C.llama_token
+	prompt             string
+	enableWatermark    bool
+	vocab              *C.struct_llama_vocab
+	ctx                *C.struct_llama_context
+	smpl               *C.struct_llama_sampler
+	model              *C.struct_llama_model
+	ResultChan         chan TokenResult
+	CloseResultChan    chan bool
+	history            unsafe.Pointer
+	historySize        int
+	n_vocab            int
+	gamma              float64
+	logitbias          float64
+	seed               string
+	newTokenID         C.llama_token
+	piece              string
+	tokenhistoryPtr    *C.llama_token
+	totalTokenCnt      int
+	totalGreenTokenCnt int
+	CurrentZscore      float64
+	nctx               C.uint32_t
+	nctxUsed           C.llama_pos
+	resetSampler       bool
 }
 
 // var ResultChan = make(chan TokenResult)
@@ -97,10 +95,10 @@ func InitModel() (PromptData, error) {
 
 	n_vocab := C.llama_vocab_n_tokens(vocab)
 
-	ctx := C.llama_init_from_model(model, ctx_params)
-	if ctx == nil {
-		return Data, fmt.Errorf("Could not set context")
-	}
+	// ctx := C.llama_init_from_model(model, ctx_params)
+	// if ctx == nil {
+	// 	return Data, fmt.Errorf("Could not set context")
+	// }
 	// defer C.llama_free(ctx)
 
 	// smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
@@ -118,10 +116,10 @@ func InitModel() (PromptData, error) {
 	fmt.Println("Model Loaded Successfully")
 
 	Data = PromptData{
-		prompt:          "",
-		enableWatermark: false,
-		vocab:           vocab,
-		ctx:             ctx,
+		// prompt:          "",
+		// enableWatermark: false,
+		vocab: vocab,
+		// ctx:             ctx,
 		// smpl:            smpl,
 		model:   model,
 		n_vocab: int(n_vocab),
@@ -135,7 +133,7 @@ func InitModel() (PromptData, error) {
 	return Data, nil
 }
 
-func StartGenerationwithParams(Data PromptData) (bool, error) {
+func StartGenerationwithParams(session *Session, Data PromptData) (bool, error) {
 
 	//Manual Terminal Testing
 	// reader := bufio.NewReader(os.Stdin)
@@ -166,7 +164,10 @@ func StartGenerationwithParams(Data PromptData) (bool, error) {
 
 	// fmt.Println("Data Logs Before Sampler: ", Data.logitbias, Data.gamma, Data.seed, Data.history)
 	// NewData.historySize = historySize
-	if Data.changeWaterMarkStatus {
+	// if Data.changeWaterMarkStatus {
+
+	// }
+	if Data.resetSampler {
 		if Data.enableWatermark {
 			fmt.Println("Watermarking is enabled")
 			fmt.Println("Data Logs Before Sampler: ", Data.logitbias, Data.gamma, Data.seed, Data.history)
@@ -180,7 +181,7 @@ func StartGenerationwithParams(Data PromptData) (bool, error) {
 		}
 	}
 
-	generationOver, err := RunConvo(Data, true)
+	generationOver, err := RunConvo(session, Data, true)
 	if err != nil {
 		return false, fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -188,7 +189,7 @@ func StartGenerationwithParams(Data PromptData) (bool, error) {
 	return generationOver, nil
 }
 
-func Generate(prompt PromptData) (string, bool, error) {
+func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 
 	// defer close(TokenChan)
 	// defer close(TokenIDChan)
@@ -196,6 +197,9 @@ func Generate(prompt PromptData) (string, bool, error) {
 
 	cPrompt := C.CString(prompt.prompt)
 	defer C.free(unsafe.Pointer(cPrompt))
+
+	// var generatedTokens []TokenResult
+	generatedTokens := make([]TokenResult, 0)
 
 	// file, err := os.Create("output.txt")
 	// if err != nil {
@@ -218,7 +222,7 @@ func Generate(prompt PromptData) (string, bool, error) {
 
 	ret := C.llama_tokenize(prompt.vocab, cPrompt, C.int32_t(len(prompt.prompt)), tokenPtr, C.int32_t(len(promptTokens)), true, true)
 	if ret < 0 {
-		return "", false, fmt.Errorf("failed to tokenize prompt")
+		return "", false, generatedTokens, fmt.Errorf("failed to tokenize prompt")
 	}
 
 	start := 0
@@ -248,18 +252,10 @@ func Generate(prompt PromptData) (string, bool, error) {
 	prompt.totalGreenTokenCnt = 0
 	prompt.totalTokenCnt = 0
 	var pending []byte
+	var immediateStop bool
+	// var generatedTokens []TokenResult
 
 	for {
-
-		// select {
-		// case <-closeChan:
-		// 	fmt.Println("Generation stopped")
-		// 	defer C.llama_sampler_free(smpl)
-		// 	defer C.llama_free(ctx)
-		// 	defer C.llama_model_free(Data.model)
-		// 	return response, nil
-		// default:
-		// }
 		// Check context size
 		// nCtx = C.llama_n_ctx(prompt.ctx)
 
@@ -273,13 +269,13 @@ func Generate(prompt PromptData) (string, bool, error) {
 		if C.uint32_t(nCtxUsed)+C.uint32_t(batch.n_tokens) > prompt.nctx {
 			fmt.Print("\n\033[0m")
 			fmt.Println("Current nCtxUsed and nCtx is: ", int(nCtxUsed), prompt.nctx)
-			return "", false, fmt.Errorf("context size exceeded")
+			return "", false, generatedTokens, fmt.Errorf("context size exceeded")
 		}
 
 		// Run the model
 		ret := C.llama_decode(prompt.ctx, batch)
 		if ret != 0 {
-			return "", false, fmt.Errorf("failed to decode, ret = %d", ret)
+			return "", false, generatedTokens, fmt.Errorf("failed to decode, ret = %d", ret)
 		}
 
 		// Sample next token
@@ -302,10 +298,10 @@ func Generate(prompt PromptData) (string, bool, error) {
 		n := C.llama_token_to_piece(prompt.vocab, newTokenID, &buf[0], C.int32_t(len(buf)), 0, true)
 
 		if n < 0 {
-			return "", false, fmt.Errorf("failed to convert token to piece")
+			return "", false, generatedTokens, fmt.Errorf("failed to convert token to piece")
 		}
 
-		pieceBytes := C.GoBytes(unsafe.Pointer(&buf[0]),n)
+		pieceBytes := C.GoBytes(unsafe.Pointer(&buf[0]), n)
 
 		pending = append(pending, pieceBytes...)
 
@@ -313,12 +309,24 @@ func Generate(prompt PromptData) (string, bool, error) {
 			piece := string(pending)
 			prompt.piece = piece
 			response += piece
+			result := TokenResult{}
 
-			prompt.totalTokenCnt, prompt.totalGreenTokenCnt, prompt.CurrentZscore = BasicGreenStreamPercentage(prompt, startTime)
+			prompt.totalTokenCnt, prompt.totalGreenTokenCnt, prompt.CurrentZscore, result, immediateStop = BasicGreenStreamPercentage(prompt, startTime)
+
+			if immediateStop {
+				fmt.Println("Generation stopped due to CloseResultChan signal")
+				fmt.Println("Current nCtxUsed and nCtx is: ", int(nCtxUsed), prompt.nctx)
+				// C.llama_memory_seq_rm(C.llama_get_memory(prompt.ctx), 0, prompt.nctxUsed-1, prompt.nctxUsed)
+				return response, true, generatedTokens, nil
+			}
+
+			generatedTokens = append(generatedTokens, result)
+
 			fmt.Print(piece)
 
 			pending = pending[:0]
 		}
+
 
 		// Convert C buffer -> Go string
 		// piece := C.GoStringN(&buf[0], n)
@@ -374,17 +382,20 @@ func Generate(prompt PromptData) (string, bool, error) {
 
 	fmt.Println("Current nCtxUsed and nCtx is: ", int(nCtxUsed), prompt.nctx)
 
-	return response, true, nil
+	return response, true, generatedTokens, nil
 }
 
 // var closeChan = make(chan bool)
 
-func RunConvo(prompt PromptData, websocket bool) (bool, error) {
+func RunConvo(session *Session, prompt PromptData, websocket bool) (bool, error) {
 
 	messages := make([]C.llama_chat_message, 0)
+	internalmessages := make([]InternalMessage, 0)
 	formatted := make([]C.char, int(C.llama_n_ctx(prompt.ctx)))
 	prevLen := 0
 	genrationOverGlobal := false
+	zscore := 0.0
+	ctxUsed := 0
 
 	for {
 
@@ -400,11 +411,19 @@ func RunConvo(prompt PromptData, websocket bool) (bool, error) {
 			// fmt.Println("Registered Prompt: ", strings.TrimSpace(strings.ToLower(user)))
 		}
 
-		if strings.TrimSpace(strings.ToLower(prompt.prompt)) == "end" {
-			break
-		}
+		internalmessages, _, _ = convertToInternalMessages(
+			internalmessages,
+			nil,
+			prompt,
+			"user",
+		)
+
+		// if strings.TrimSpace(strings.ToLower(prompt.prompt)) == "end" {
+		// 	break
+		// }
 
 		// Get chat template
+		// fmt.Println(prompt.model)
 		tmpl := C.llama_model_chat_template(prompt.model, nil)
 
 		// Create C string for user's message
@@ -441,12 +460,19 @@ func RunConvo(prompt PromptData, websocket bool) (bool, error) {
 		// fmt.Print("\033[33m")
 
 		// response, err := Generate(prompt.prompt, prompt.vocab, prompt.ctx, prompt.smpl, prompt.enableWatermark, prompt.ResultChan, prompt.history, prompt.historySize, prompt.n_vocab)
-		response, generationOver, err := Generate(prompt)
+		response, generationOver, generatedTokens, err := Generate(prompt)
 		if err != nil {
 			return false, err
 		}
 
 		genrationOverGlobal = generationOver
+
+		internalmessages, zscore, ctxUsed = convertToInternalMessages(
+			internalmessages,
+			generatedTokens,
+			prompt,
+			"assistant",
+		)
 
 		//End Yellow
 		// fmt.Print("\n\033[0m")
@@ -471,5 +497,75 @@ func RunConvo(prompt PromptData, websocket bool) (bool, error) {
 		}
 	}
 
+	// session.TokenSpent = int(prompt.nctxUsed)
+	session.TokenTotal = int(prompt.nctx)
+	session.Zscore = zscore
+	session.TokenSpent = ctxUsed
+	session.InternalMessages = append(session.InternalMessages, internalmessages...)
+
 	return genrationOverGlobal, nil
+}
+
+func convertToInternalMessages(
+	history []InternalMessage,
+	messages []TokenResult,
+	prompt PromptData,
+	role string,
+) ([]InternalMessage, float64, int) {
+
+	msg := InternalMessage{
+		Typ:             "message",
+		Role:            role,
+		Data:            make([]string, 0),
+		Greensplit:      make([]bool, 0),
+		Thinkdata:       make([]string, 0),
+		Thinkgreensplit: make([]bool, 0),
+
+		Watermarked: prompt.enableWatermark,
+		Logitbias:   prompt.logitbias,
+		Gamma:       prompt.gamma,
+		Seed:        prompt.seed,
+		HistorySize: prompt.historySize,
+	}
+
+	// User message
+	if role == "user" {
+		msg.Data = append(msg.Data, prompt.prompt)
+		return append(history, msg), 0.0, 0
+	}
+
+	// Assistant message
+	inThink := false
+
+	for _, token := range messages {
+
+		text := token.Token
+
+		if text == "<think>" {
+			inThink = true
+			continue
+		}
+
+		if text == "</think>" {
+			inThink = false
+			continue
+		}
+
+		// Normal token
+		if inThink {
+			msg.Thinkdata = append(msg.Thinkdata, text)
+			msg.Thinkgreensplit = append(
+				msg.Thinkgreensplit,
+				token.IsGreen,
+			)
+		} else {
+			msg.Data = append(msg.Data, text)
+			msg.Greensplit = append(
+				msg.Greensplit,
+				token.IsGreen,
+			)
+		}
+	}
+
+	return append(history, msg), messages[len(messages)-1].ZScore, messages[len(messages)-1].ContextUsed
 }

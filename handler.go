@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -37,13 +38,14 @@ var upgrader = websocket.Upgrader{
 }
 
 type wSMessage struct {
-	Type        string  `json:"type"`
-	Text        string  `json:"text"`
-	Watermark   bool    `json:"watermark"`
-	HistorySize int     `json:"history_size"`
-	Seed        string  `json:"seed"`
-	Gamma       float64 `json:"gamma"`
-	LogitBias   float64 `json:"logit_bias"`
+	Type         string  `json:"type"`
+	Text         string  `json:"text"`
+	Watermark    bool    `json:"watermark"`
+	HistorySize  int     `json:"history_size"`
+	Seed         string  `json:"seed"`
+	Gamma        float64 `json:"gamma"`
+	LogitBias    float64 `json:"logit_bias"`
+	ResetSampler bool    `json:"reset_sampler"`
 }
 
 type ProcessRequest struct {
@@ -59,41 +61,31 @@ type Server struct {
 }
 
 type Session struct {
-	ID        string
-	Watermark *bool
-	Ctx       *C.struct_llama_context
-	Smpl      *C.struct_llama_sampler
-	// ResultChan chan TokenResult
+	ID               string
+	Watermark        *bool
+	Ctx              *C.struct_llama_context
+	Smpl             *C.struct_llama_sampler
+	ResultChan       chan TokenResult
+	Data             PromptData
+	CloseResultChan  chan bool
+	TokenSpent       int
+	TokenTotal       int
+	Zscore           float64
+	InternalMessages []InternalMessage
 }
 
-func (s *Server) getOrCreateSession(id string) (*Session, bool, error) {
-
-	session, exists := s.Sessions[id]
-	if exists {
-		return session, true, nil
-	}
-
-	ctx := C.llama_init_from_model(Model, Ctx_params)
-	if ctx == nil {
-		return nil, false, fmt.Errorf("Faild to create context")
-	}
-
-	// smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
-	// if smpl == nil {
-	// 	return nil, fmt.Errorf("Faild to create sampler")
-	// }
-
-	// Create context + sampler here
-	session = &Session{
-		ID:  id,
-		Ctx: ctx,
-		// Smpl:       smpl,
-		// ResultChan: make(chan TokenResult, 32),
-	}
-
-	s.Sessions[id] = session
-
-	return session, false, nil
+type InternalMessage struct {
+	Typ             string
+	Role           string
+	Data            []string
+	Greensplit      []bool
+	Thinkdata       []string
+	Thinkgreensplit []bool
+	Watermarked     bool
+	Logitbias       float64
+	Gamma           float64
+	Seed            string
+	HistorySize     int
 }
 
 func main() {
@@ -109,16 +101,54 @@ func main() {
 	}
 
 	router := gin.Default()
+	router.Use(cors.Default())
 
 	router.GET("/", func(c *gin.Context) { c.File("./index.html") })
 	router.GET("/ws", server.websocketHandler)
+	router.GET("/getsession", server.getSession)
 	router.POST("/process", server.processTextHandler)
 	router.GET("/resetctx", server.resetContext)
-
+	router.GET("/resetmsgs", server.resetMessages)
+	router.GET("/closechan", server.closeResultChan)
 	router.Run(":8080")
 }
 
-//not yet tested
+func (s *Server) getOrCreateSession(id string) (*Session, bool, error) {
+
+	session, exists := s.Sessions[id]
+	if exists {
+		return session, true, nil
+	}
+
+	ctx := C.llama_init_from_model(Model, Ctx_params)
+	if ctx == nil {
+		return nil, false, fmt.Errorf("Faild to create context")
+	}
+
+	smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
+	if smpl == nil {
+		return nil, false, fmt.Errorf("Faild to create sampler")
+	}
+
+	// Create context + sampler here
+	session = &Session{
+		ID:   id,
+		Ctx:  ctx,
+		Smpl: smpl,
+		Data: PromptData{
+			model:   s.Data.model,
+			vocab:   s.Data.vocab,
+			n_vocab: s.Data.n_vocab,
+		},
+		// ResultChan: make(chan TokenResult, 32),
+		// CloseResultChan: make(chan bool, 1),
+	}
+
+	s.Sessions[id] = session
+
+	return session, false, nil
+}
+
 func (s *Server) resetContext(c *gin.Context) {
 
 	sessionID := c.Query("session_id")
@@ -152,6 +182,71 @@ func (s *Server) resetContext(c *gin.Context) {
 	})
 }
 
+func (s *Server) resetMessages(c *gin.Context) {
+
+	sessionID := c.Query("session_id")
+	session, lookupExists, err := s.getOrCreateSession(sessionID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Failed to Get/Create Session",
+		})
+		return
+	}
+
+	if lookupExists {
+		newctx := C.llama_init_from_model(Model, Ctx_params)
+		if newctx == nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Failed to Create Context",
+			})
+			return
+		}
+		session.InternalMessages = []InternalMessage{}
+
+		c.JSON(http.StatusOK, gin.H{
+			"success": "Messages Were Reset",
+		})
+
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": "New Context Was Created",
+	})
+}
+
+
+
+func (s *Server) closeResultChan(c *gin.Context) {
+	sessionID := c.Query("session_id")
+
+	session, _, err := s.getOrCreateSession(sessionID)
+	if err != nil || session == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Session not found",
+		})
+		return
+	}
+
+	if session.CloseResultChan == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Close channel not found",
+		})
+		return
+	}
+
+	select {
+	case session.CloseResultChan <- false:
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Close signal sent",
+		})
+	default:
+		c.JSON(http.StatusConflict, gin.H{
+			"message": "Close signal already pending",
+		})
+	}
+}
+
 func (s *Server) websocketHandler(c *gin.Context) {
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
@@ -170,7 +265,10 @@ func (s *Server) websocketHandler(c *gin.Context) {
 
 	// TokenChan = make(chan string, 32)
 	// TokenIDChan = make(chan C.llama_token, 32)
-	ResultChan := make(chan TokenResult, 32)
+	ResultChan := make(chan TokenResult, 10)
+	CloseResultChan := make(chan bool, 1)
+	session.ResultChan = ResultChan
+	session.CloseResultChan = CloseResultChan
 
 	// Read messages from browser.
 	go func() {
@@ -192,28 +290,46 @@ func (s *Server) websocketHandler(c *gin.Context) {
 
 			fmt.Println("Received message:", message.Text, "Watermark:", message.Watermark, "Type:", message.Type)
 
-			if session.Watermark != nil && session.Watermark == &message.Watermark {
-				s.Data.changeWaterMarkStatus = false
-			} else {
+			// if session.Watermark != nil && session.Watermark == &message.Watermark {
+			// 	session.Data.changeWaterMarkStatus = false
+			// } else {
+			// 	smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
+			// 	if smpl == nil {
+			// 		print("Failed to create sampler")
+			// 	}
+			// 	session.Smpl = smpl
+			// 	session.Data.changeWaterMarkStatus = true
+			// }
+
+			if message.ResetSampler {
 				smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
 				if smpl == nil {
 					print("Failed to create sampler")
 				}
 				session.Smpl = smpl
-				s.Data.changeWaterMarkStatus = true
+				session.Data.resetSampler = true
+				session.Data.enableWatermark = message.Watermark
+				session.Data.seed = message.Seed
+				session.Data.gamma = message.Gamma
+				session.Data.logitbias = message.LogitBias
+				session.Data.historySize = message.HistorySize
+			} else {
+				session.Data.resetSampler = false
 			}
 
-			s.Data.enableWatermark = message.Watermark
-			s.Data.prompt = message.Text
-			s.Data.ResultChan = ResultChan
-			s.Data.seed = message.Seed
-			s.Data.gamma = message.Gamma
-			s.Data.logitbias = message.LogitBias
-			s.Data.historySize = message.HistorySize
-			s.Data.ctx = session.Ctx
-			s.Data.smpl = session.Smpl
+			// session.Smpl = smpl
+			// session.Data.enableWatermark = message.Watermark
+			session.Data.prompt = message.Text
+			session.Data.ResultChan = ResultChan
+			session.Data.CloseResultChan = CloseResultChan
+			// session.Data.seed = message.Seed
+			// session.Data.gamma = message.Gamma
+			// session.Data.logitbias = message.LogitBias
+			// session.Data.historySize = message.HistorySize
+			session.Data.ctx = session.Ctx
+			session.Data.smpl = session.Smpl
 
-			generationOver, err := StartGenerationwithParams(s.Data)
+			generationOver, err := StartGenerationwithParams(session, session.Data)
 
 			if err != nil {
 				println("Error Occured During Generation", err)
@@ -234,6 +350,8 @@ func (s *Server) websocketHandler(c *gin.Context) {
 			return
 		}
 
+		// fmt.Println("writing to socket", data)
+
 		// fmt.Println("Token Before Write: ",token)
 		err = conn.WriteMessage(
 			websocket.TextMessage,
@@ -244,6 +362,30 @@ func (s *Server) websocketHandler(c *gin.Context) {
 		}
 	}
 
+}
+
+func (s *Server) getSession(c *gin.Context) {
+
+	sessionID := c.Query("session_id")
+	session, _, err := s.getOrCreateSession(sessionID)
+	if err != nil || session == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Session not found",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"z_score":                 session.Zscore,
+		"tokens_spent":            session.TokenSpent,
+		"total_available_tokens":  session.TokenTotal,
+		"watermark":               session.Data.enableWatermark,
+		"logit_bias":              session.Data.logitbias,
+		"history_size":            session.Data.historySize,
+		"gamma":                   session.Data.gamma,
+		"seed":                    session.Data.seed,
+		"messages":                session.InternalMessages,
+	})
 }
 
 func (s *Server) processTextHandler(c *gin.Context) {

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./TextBox.css";
 import Settings from "./Settings.jsx";
 
@@ -53,6 +53,63 @@ function TextBox() {
     seed: "i_am_a_llm",
   });
 
+  useEffect(() => {
+    const sessionID = getSessionID();
+
+    fetch(`http://localhost:8080/getsession?session_id=${sessionID}`)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("Failed to get session");
+        }
+        return response.json();
+      })
+      .then((data) => {
+        setStats({
+          zScore: data.z_score,
+          contextUsed: data.tokens_spent,
+          totalContext: data.total_available_tokens,
+        });
+
+        setSettings({
+          watermark: data.watermark,
+          logit_bias: data.logit_bias,
+          gamma: data.gamma,
+          history_size: data.history_size,
+          seed: data.seed,
+        });
+
+        const renderedMessages = data.messages.map((message) => {
+          if (message.Role === "user") {
+            return {
+              role: "user",
+              content: message.Data[0] || "",
+            };
+          }
+
+          return {
+            role: "assistant",
+
+            content: message.Data.map((text, index) => ({
+              text: text,
+              isGreen: message.Greensplit[index],
+            })),
+
+            thinking: message.Thinkdata.map((text, index) => ({
+              text: text,
+              isGreen: message.Thinkgreensplit[index],
+            })),
+            watermarked: message.Watermarked,
+            showThinking: false,
+          };
+        });
+
+        setMessages(renderedMessages);
+      })
+      .catch((error) => {
+        console.error("Failed to load session:", error);
+      });
+  }, []);
+
   const handleChange = (event) => setText(event.target.value);
 
   function handleSubmit(event) {
@@ -87,13 +144,14 @@ function TextBox() {
     ws.onopen = () => {
       ws.send(
         JSON.stringify({
-          type: "placeholder",
+          type: "chat",
           text: prompt,
           watermark: settings.watermark,
           logit_bias: settings.logit_bias,
           gamma: settings.gamma,
           history_size: settings.history_size,
           seed: settings.seed,
+          reset_sampler: true,
         }),
       );
     };
@@ -177,6 +235,17 @@ function TextBox() {
     };
   }
 
+  const handleStop = async (event) => {
+    event.preventDefault();
+    const sessionID = getSessionID();
+
+    try {
+      await fetch(`http://localhost:8080/closechan?session_id=${sessionID}`);
+    } catch (error) {
+      console.error("Failed to stop generation:", error);
+    }
+  };
+
   return (
     <div className="app">
       <main className="chat">
@@ -216,7 +285,12 @@ function TextBox() {
                     {message.content.map((item, index) => (
                       <span
                         key={index}
-                        style={{ color: item.isGreen ? "green" : "red" }}
+                        // style={{ color: item.isGreen ? "green" : "red" }}
+                        style={
+                                (message.watermarked ?? settings.watermark)
+                                  ? { color: item.isGreen ? "green" : "red" }
+                                  : {}
+                              }
                       >
                         {item.text}
                       </span>
@@ -248,9 +322,14 @@ function TextBox() {
                           {message.thinking.map((item, index) => (
                             <span
                               key={index}
-                              style={{
-                                color: item.isGreen ? "green" : "red",
-                              }}
+                              // style={{
+                              //   color: item.isGreen ? "green" : "red",
+                              // }}
+                              style={
+                                (message.watermarked ?? settings.watermark)
+                                  ? { color: item.isGreen ? "green" : "red" }
+                                  : {}
+                              }
                             >
                               {item.text}
                             </span>
@@ -265,7 +344,10 @@ function TextBox() {
           ))}
         </div>
 
-        <form className="composer" onSubmit={handleSubmit}>
+        <form
+          className="composer"
+          onSubmit={isGenerating ? handleStop : handleSubmit}
+        >
           <button
             className="settings-button"
             type="button"
@@ -295,10 +377,10 @@ function TextBox() {
           <button
             className="send-button"
             type="submit"
-            disabled={isGenerating || !text.trim()}
-            aria-label="Send message"
+            // disabled={isGenerating || !text.trim()}
+            aria-label={isGenerating ? "Stop generation" : "Send message"}
           >
-            <span className="send-arrow">🡅</span>
+            <span className="send-arrow">{isGenerating ? "■" : "🡅"}</span>
           </button>
         </form>
       </main>
@@ -308,6 +390,7 @@ function TextBox() {
           settings={settings}
           setSettings={setSettings}
           setPage={setPage}
+          sessionID={getSessionID()}
         />
       )}
     </div>
