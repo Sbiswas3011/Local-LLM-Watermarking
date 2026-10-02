@@ -76,7 +76,7 @@ type Session struct {
 
 type InternalMessage struct {
 	Typ             string
-	Role           string
+	Role            string
 	Data            []string
 	Greensplit      []bool
 	Thinkdata       []string
@@ -161,6 +161,11 @@ func (s *Server) resetContext(c *gin.Context) {
 	}
 
 	if lookupExists {
+
+		oldctx := session.Ctx
+		if oldctx != nil {
+			C.llama_free(oldctx)
+		}
 		newctx := C.llama_init_from_model(Model, Ctx_params)
 		if newctx == nil {
 			c.JSON(http.StatusBadRequest, gin.H{
@@ -214,8 +219,6 @@ func (s *Server) resetMessages(c *gin.Context) {
 		"success": "New Context Was Created",
 	})
 }
-
-
 
 func (s *Server) closeResultChan(c *gin.Context) {
 	sessionID := c.Query("session_id")
@@ -302,6 +305,11 @@ func (s *Server) websocketHandler(c *gin.Context) {
 			// }
 
 			if message.ResetSampler {
+				oldSmpl := session.Smpl
+				if oldSmpl != nil {
+					C.llama_sampler_free(oldSmpl)
+					session.Smpl = nil
+				}
 				smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
 				if smpl == nil {
 					print("Failed to create sampler")
@@ -376,15 +384,15 @@ func (s *Server) getSession(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"z_score":                 session.Zscore,
-		"tokens_spent":            session.TokenSpent,
-		"total_available_tokens":  session.TokenTotal,
-		"watermark":               session.Data.enableWatermark,
-		"logit_bias":              session.Data.logitbias,
-		"history_size":            session.Data.historySize,
-		"gamma":                   session.Data.gamma,
-		"seed":                    session.Data.seed,
-		"messages":                session.InternalMessages,
+		"z_score":                session.Zscore,
+		"tokens_spent":           session.TokenSpent,
+		"total_available_tokens": session.TokenTotal,
+		"watermark":              session.Data.enableWatermark,
+		"logit_bias":             session.Data.logitbias,
+		"history_size":           session.Data.historySize,
+		"gamma":                  session.Data.gamma,
+		"seed":                   session.Data.seed,
+		"messages":               session.InternalMessages,
 	})
 }
 
