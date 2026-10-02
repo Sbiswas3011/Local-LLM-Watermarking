@@ -206,8 +206,8 @@ body {
   background: #e5e5e5;
   color: #333;
 
-  text-align: center;
-
+  text-align: left;
+  white-space: pre-wrap;
   width: 70%;
 }
 
@@ -246,6 +246,7 @@ body {
   line-height: 1.4;
 
   white-space: pre-wrap;
+  text-align: left;
 }
 
 .chat-header {

@@ -32,13 +32,13 @@ function getSessionID() {
   return id;
 }
 
-
 function TextBox() {
   const [text, setText] = useState("");
   const [messages, setMessages] = useState([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const thinkingRef = useRef(false);
+  const newlineRef = useRef(true);
   const [page, setPage] = useState("chat");
   const [stats, setStats] = useState({
     zScore: 0,
@@ -106,6 +106,24 @@ function TextBox() {
           };
         });
 
+        renderedMessages.forEach((message) => {
+          if (message.role !== "assistant") return;
+
+          if (message.content.length > 0) {
+            message.content[0].text = message.content[0].text.replace(
+              /^\n+/,
+              "",
+            );
+          }
+
+          if (message.thinking.length > 0) {
+            message.thinking[0].text = message.content[0].text.replace(
+              /^\n+/,
+              "",
+            );
+          }
+        });
+
         setMessages(renderedMessages);
       })
       .catch((error) => {
@@ -161,21 +179,28 @@ function TextBox() {
 
     ws.onmessage = (event) => {
       const result = JSON.parse(event.data);
-      const token = result.Token;
+      let token = result.Token;
       const isGreen = result.IsGreen;
 
       if (token.includes("<think>")) {
         // console.log("Setting True")
         thinkingRef.current = true;
+        newlineRef.current = true;
         setIsThinking(true);
         return;
       }
 
       if (token.includes("</think>")) {
         // console.log("Setting False")
+        newlineRef.current = true;
         thinkingRef.current = false;
         setIsThinking(false);
         return;
+      }
+
+      if (newlineRef.current) {
+        token = token.replace(/^\n+/, "");
+        newlineRef.current = false;
       }
 
       console.log("iThinking, token:", isThinking, token);
@@ -195,7 +220,11 @@ function TextBox() {
             ...updated[lastIndex],
             thinking: [
               ...updated[lastIndex].thinking,
-              { text: token, isGreen: isGreen, watermarked: result.Watermarked },
+              {
+                text: token,
+                isGreen: isGreen,
+                watermarked: result.Watermarked,
+              },
             ],
           };
         } else {
@@ -203,7 +232,11 @@ function TextBox() {
             ...updated[lastIndex],
             content: [
               ...updated[lastIndex].content,
-              { text: token, isGreen: isGreen, watermarked: result.Watermarked },
+              {
+                text: token,
+                isGreen: isGreen,
+                watermarked: result.Watermarked,
+              },
             ],
           };
         }
@@ -290,10 +323,10 @@ function TextBox() {
                         key={index}
                         // style={{ color: item.isGreen ? "green" : "red" }}
                         style={
-                                (message.watermarked ?? item.watermarked)
-                                  ? { color: item.isGreen ? "green" : "red" }
-                                  : {}
-                              }
+                          (message.watermarked ?? item.watermarked)
+                            ? { color: item.isGreen ? "green" : "red" }
+                            : {}
+                        }
                       >
                         {item.text}
                       </span>
