@@ -2,10 +2,10 @@ import "./Settings.css";
 
 function Settings({ settings, setSettings, setPage, sessionID }) {
 
-  const API_HOST = `${window.location.hostname}:8080`;
+  // const API_HOST = `${window.location.hostname}:8080`;
   const resetContext = async () => {
     try {
-      await fetch(`http://${API_HOST}/resetctx?session_id=${sessionID}`);
+      await fetch(`/api/resetctx?session_id=${sessionID}`);
       setPage("chat")
     } catch (error) {
       console.error("Failed to reset context:", error);
@@ -14,7 +14,7 @@ function Settings({ settings, setSettings, setPage, sessionID }) {
 
   const resetMessages = async () => {
     try {
-      await fetch(`http://${API_HOST}/resetmsgs?session_id=${sessionID}`);
+      await fetch(`/api/resetmsgs?session_id=${sessionID}`);
 
       window.location.reload();
     } catch (error) {
