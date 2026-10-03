@@ -1,8 +1,8 @@
 package main
 
 /*
-#cgo CFLAGS: -IC:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/include -IC:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/ggml/include
-#cgo LDFLAGS: -L"C:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/build/src/Release" -lllama
+#cgo CFLAGS: -IC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/include -IC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/ggml/include
+#cgo windows,amd64 LDFLAGS: -LC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/build/src/Release -l:llama.lib
 #include "llama.h"
 #include <stdlib.h>
 static void silent_log_callback(
@@ -292,17 +292,6 @@ func (s *Server) websocketHandler(c *gin.Context) {
 			}
 
 			fmt.Println("Received message:", message.Text, "Watermark:", message.Watermark, "Type:", message.Type)
-
-			// if session.Watermark != nil && session.Watermark == &message.Watermark {
-			// 	session.Data.changeWaterMarkStatus = false
-			// } else {
-			// 	smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
-			// 	if smpl == nil {
-			// 		print("Failed to create sampler")
-			// 	}
-			// 	session.Smpl = smpl
-			// 	session.Data.changeWaterMarkStatus = true
-			// }
 
 			if message.ResetSampler {
 				oldSmpl := session.Smpl

@@ -44,6 +44,7 @@ function TextBox() {
     zScore: 0,
     contextUsed: 0,
     totalContext: 0,
+    tokensPerSecond: 0,
   });
 
   const [settings, setSettings] = useState({
@@ -71,6 +72,7 @@ function TextBox() {
           zScore: data.z_score,
           contextUsed: data.tokens_spent,
           totalContext: data.total_available_tokens,
+          tokensPerSecond: 0,
         });
 
         setSettings({
@@ -209,6 +211,7 @@ function TextBox() {
         zScore: result.ZScore,
         contextUsed: result.ContextUsed,
         totalContext: result.TotalContext,
+        tokensPerSecond: result.TokensPerSecond,
       });
 
       setMessages((previous) => {
@@ -301,6 +304,7 @@ function TextBox() {
             Context: {stats.contextUsed} / {stats.totalContext}
           </div>
           <div>Z-Score: {Number(stats.zScore).toFixed(2)}</div>
+          <div>Tokens/s: {Number(stats.tokensPerSecond).toFixed(2)}</div>
         </div>
 
         <div className="messages">

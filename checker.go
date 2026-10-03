@@ -1,8 +1,8 @@
 package main
 
 /*
-#cgo CFLAGS: -IC:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/include -IC:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/ggml/include
-#cgo LDFLAGS: -L"C:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/build/src/Release" -lllama
+#cgo CFLAGS: -IC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/include -IC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/ggml/include
+#cgo windows,amd64 LDFLAGS: -LC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/build/src/Release -l:llama.lib
 #include "llama.h"
 #include <stdlib.h>
 static void silent_log_callback(
@@ -26,141 +26,6 @@ import (
 	"unsafe"
 )
 
-// func main() {
-// 	fmt.Println("llama.cpp C API loaded")
-// 	fmt.Printf("llama.cpp version: %s\n", C.GoString(C.llama_version()))
-// 	modelPath := "C:/Users/JAYANTA/Desktop/gguf_store/Swift-Qwen3.8-27B-Q4_K_M.gguf"
-
-// 	model_params := C.llama_model_default_params()
-// 	model_params.n_gpu_layers = C.int(99)
-
-// 	C.disable_llama_logs()
-
-// 	model := C.llama_model_load_from_file(C.CString(modelPath), model_params)
-// 	if model == nil {
-// 		fmt.Println("Model Not Found")
-// 		return
-// 	}
-// 	defer C.llama_model_free(model)
-
-// 	vocab := C.llama_model_get_vocab(model)
-
-// 	reader := bufio.NewReader(os.Stdin)
-
-// 	fmt.Println("Enable StreamCheck? (y/n): ")
-// 	input, _ := reader.ReadString('\n')
-
-// 	StreamCheckEnabled := strings.TrimSpace(strings.ToLower(input)) == "y"
-
-// 	if StreamCheckEnabled{
-// 		// Wait for the file to be cleared
-// 		fmt.Println("Waiting for output.txt to be cleared...")
-
-// 		for {
-// 			info, err := os.Stat("../output.txt")
-
-// 			if err == nil && info.Size() == 0 {
-// 				break
-// 			}
-
-// 			time.Sleep(200 * time.Millisecond)
-// 		}
-
-// 		fmt.Println("Waiting for generation...")
-
-// 		// Wait until output.txt starts receiving text
-// 		var lastSize int64 = 0
-
-// 		for {
-// 			info, err := os.Stat("../output.txt")
-// 			if err == nil && info.Size() > 0 {
-// 				lastSize = info.Size()
-// 				break
-// 			}
-
-// 			time.Sleep(200 * time.Millisecond)
-// 		}
-
-// 		fmt.Println("Generation started. Waiting 5 seconds...")
-
-// 		// Wait 5 seconds after generation starts
-// 		time.Sleep(5 * time.Second)
-
-// 		for {
-// 			data, err := os.ReadFile("../output.txt")
-// 			if err != nil {
-// 				fmt.Println("Failed to read output.txt:", err)
-// 				return
-// 			}
-
-// 			text := string(data)
-
-// 			value := greenPercentage(text, vocab)
-
-// 			fmt.Printf("Green Percentage: %.2f%%\n", value)
-
-// 			// Check whether the file is still growing
-// 			info, err := os.Stat("../output.txt")
-// 			if err != nil {
-// 				return
-// 			}
-
-// 			currentSize := info.Size()
-
-// 			if currentSize == lastSize {
-// 				fmt.Println("Generation finished.")
-// 				break
-// 			}
-
-// 			lastSize = currentSize
-
-// 			time.Sleep(5 * time.Second)
-// 		}
-
-// 	}else{
-
-// 		data, err := os.ReadFile("../normal.txt")
-// 		if err != nil {
-// 			fmt.Println("Failed to read output.txt:", err)
-// 			return
-// 		}
-
-// 		text := string(data)
-
-// 		value := greenPercentage(text, vocab)
-
-// 		fmt.Println("Green Percentage: ", value)
-// 	}
-
-// }
-
-func greenPercentage(text string, vocab *C.struct_llama_vocab) float64 {
-
-	cText := C.CString(text)
-	defer C.free(unsafe.Pointer(cText))
-
-	nTokens := -C.llama_tokenize(vocab, cText, C.int32_t(len(text)), nil, 0, true, true)
-
-	tokens := make([]C.llama_token, nTokens)
-
-	C.llama_tokenize(vocab, cText, C.int32_t(len(text)), (*C.llama_token)(unsafe.Pointer(&tokens[0])), C.int32_t(len(tokens)), true, true)
-
-	green := 0
-
-	// for _, token := range tokens {
-	// 	tokenInt := int(token)
-	// 	if wm.IsGreen(tokenInt) {
-	// 		green++
-	// 	}
-	// }
-
-	if len(tokens) == 0 {
-		return 0
-	}
-
-	return float64(green) / float64(len(tokens)) * 100
-}
-
 type TokenResult struct {
 	Token           string
 	GreenCount      int
@@ -176,58 +41,54 @@ type TokenResult struct {
 
 func BasicGreenStreamPercentage(prompt PromptData, startTime time.Time) (int, int, float64, TokenResult, bool) {
 
-	isGreen := false
-	seedC := C.CString(prompt.seed)
-	defer C.free(unsafe.Pointer(seedC))
-
-	// fmt.Println("Data Logs Before Sampler: ", Data.logitbias, Data.gamma, Data.seed, Data.history)
-
 	result := TokenResult{}
-
-	// fmt.Println("reached before cgo")
-
-	isGreen = bool(C.llama_sampler_check_basic_watermarkv2(prompt.newTokenID, C.float(prompt.gamma), seedC, prompt.tokenhistoryPtr, C.size_t(prompt.historySize), C.int32_t(prompt.n_vocab)))
-
-	// fmt.Println("reached after cgo: ", isGreen, prompt.newTokenID, prompt.gamma, prompt.seed, prompt.historySize, prompt.n_vocab)
-
-	if isGreen {
-		prompt.totalGreenTokenCnt++
-		result.IsGreen = true
-	} else {
-		result.IsGreen = false
-	}
-
 	prompt.totalTokenCnt++
 
-	elapsedTime := time.Since(startTime).Seconds()
+	if !prompt.enableWatermark {
+		result.Token = prompt.piece
+		result.ContextUsed = int(prompt.nctxUsed)
+		result.TotalContext = int(prompt.nctx)
+		result.Watermarked = prompt.enableWatermark
+	}else{
+		isGreen := false
+		seedC := C.CString(prompt.seed)
+		defer C.free(unsafe.Pointer(seedC))
 
-	tokensPerSecond := float64(prompt.totalTokenCnt) / elapsedTime
+		isGreen = bool(C.llama_sampler_check_basic_watermarkv2(prompt.newTokenID, C.float(prompt.gamma), seedC, prompt.tokenhistoryPtr, C.size_t(prompt.historySize), C.int32_t(prompt.n_vocab)))
 
-	expected := float64(prompt.totalTokenCnt) * prompt.gamma
-	variance := float64(prompt.totalTokenCnt) * prompt.gamma * (1.0 - prompt.gamma)
-	if variance > 0 {
-		prompt.CurrentZscore = (float64(prompt.totalGreenTokenCnt) - expected) / math.Sqrt(variance)
-	} else {
-		prompt.CurrentZscore = 0
+		if isGreen {
+			prompt.totalGreenTokenCnt++
+			result.IsGreen = true
+		} else {
+			result.IsGreen = false
+		}
+
+		expected := float64(prompt.totalTokenCnt) * prompt.gamma
+		variance := float64(prompt.totalTokenCnt) * prompt.gamma * (1.0 - prompt.gamma)
+		if variance > 0 {
+			prompt.CurrentZscore = (float64(prompt.totalGreenTokenCnt) - expected) / math.Sqrt(variance)
+		} else {
+			prompt.CurrentZscore = 0
+		}
+
+		result.Token = prompt.piece
+		result.GreenPercentage = float64(prompt.totalGreenTokenCnt * 100 / prompt.totalTokenCnt)
+		result.ZScore = prompt.CurrentZscore
+		result.ContextUsed = int(prompt.nctxUsed)
+		result.TotalContext = int(prompt.nctx)
+		result.Watermarked = prompt.enableWatermark
 	}
-	// prompt.CurrentZscore = (float64(prompt.totalGreenTokenCnt) - expected) / math.Sqrt(variance)
 
-	result.Token = prompt.piece
-	// result.GreenCount = prompt.totalGreenTokenCnt
-	// result.TotalCount = prompt.totalTokenCnt
-	result.GreenPercentage = float64(prompt.totalGreenTokenCnt * 100 / prompt.totalTokenCnt)
-	result.ZScore = prompt.CurrentZscore
-	result.ContextUsed = int(prompt.nctxUsed)
-	result.TotalContext = int(prompt.nctx)
+	elapsedTime := time.Since(startTime).Seconds()
+	tokensPerSecond := 1 / elapsedTime
+	fmt.Println("elapsed, count and tokens/s: ", elapsedTime, 1, tokensPerSecond)
 	result.TokensPerSecond = tokensPerSecond
-	result.Watermarked = prompt.enableWatermark
 
 	select {
 	case <-prompt.CloseResultChan:
 		return -1, -1, 0.0, result, true
 
 	case prompt.ResultChan <- result:
-		// fmt.Println("returning to channel", result.Token, result.IsGreen, result.GreenPercentage, result.ZScore, result.ContextUsed, result.TotalContext, result.TokensPerSecond)
 	}
 
 	return prompt.totalTokenCnt, prompt.totalGreenTokenCnt, prompt.CurrentZscore, result, false

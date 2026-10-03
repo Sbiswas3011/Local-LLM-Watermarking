@@ -1,8 +1,8 @@
 package main
 
 /*
-#cgo CFLAGS: -IC:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/include -IC:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/ggml/include
-#cgo LDFLAGS: -L"C:/Users/JAYANTA/Desktop/llamaClone/llama.cpp/build/src/Release" -lllama
+#cgo CFLAGS: -IC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/include -IC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/ggml/include
+#cgo windows,amd64 LDFLAGS: -LC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/build/src/Release -l:llama.lib
 #include "llama.h"
 #include <stdlib.h>
 static void silent_log_callback(
@@ -24,8 +24,6 @@ import (
 	"fmt"
 	"time"
 	"unicode/utf8"
-
-	// wm "main/watermarking"
 	"os"
 	"unsafe"
 )
@@ -58,10 +56,6 @@ type PromptData struct {
 	resetSampler       bool
 }
 
-// var ResultChan = make(chan TokenResult)
-// var TokenChan chan string
-// var TokenIDChan chan C.llama_token
-
 // var Data = PromptData{}
 
 var Model *C.struct_llama_model
@@ -75,7 +69,7 @@ func InitModel() (PromptData, error) {
 	ModelPath = "C:/Users/JAYANTA/Desktop/gguf_store/Swift-Qwen3.8-27B-Q4_K_M.gguf"
 
 	model_params := C.llama_model_default_params()
-	model_params.n_gpu_layers = C.int(99)
+	model_params.n_gpu_layers = C.int(53)
 
 	C.disable_llama_logs()
 
@@ -116,16 +110,9 @@ func InitModel() (PromptData, error) {
 	fmt.Println("Model Loaded Successfully")
 
 	Data = PromptData{
-		// prompt:          "",
-		// enableWatermark: false,
 		vocab: vocab,
-		// ctx:             ctx,
-		// smpl:            smpl,
 		model:   model,
 		n_vocab: int(n_vocab),
-		// tokenchannel:    TokenChan,
-		// tokenIDchannel:  TokenIDChan,
-		// ResultChan:      ResultChan,
 	}
 
 	fmt.Println("Data Variables: ", Data.prompt, Data.enableWatermark, Data.vocab, Data.ctx, Data.smpl, Data.model)
@@ -135,25 +122,6 @@ func InitModel() (PromptData, error) {
 
 func StartGenerationwithParams(session *Session, Data PromptData) (bool, error) {
 
-	//Manual Terminal Testing
-	// reader := bufio.NewReader(os.Stdin)
-
-	// fmt.Println("Enable watermarking? (y/n): ")
-	// input, _ := reader.ReadString('\n')
-
-	// dowatermark := strings.TrimSpace(strings.ToLower(input)) == "y"
-	// PossiblyNewCtx and NewSmpler needed
-	// NewData := Data
-	// NewData.enableWatermark = dowatermark
-	// NewData.prompt = prompt
-	// NewData.tokenchannel = tokenchan
-	// NewData.tokenIDchannel = TokenIDChan
-	// NewData.ResultChan = ResultChan
-	// NewData.seed = seed
-	// NewData.gamma = gamma
-	// NewData.logitbias = logitBias
-
-	// seed := "i_am_a_llm"
 	seedC := C.CString(Data.seed)
 	defer C.free(unsafe.Pointer(seedC))
 	history := C.llama_token_history_create()
@@ -162,11 +130,6 @@ func StartGenerationwithParams(session *Session, Data PromptData) (bool, error) 
 	nCtx := C.llama_n_ctx(Data.ctx)
 	Data.nctx = nCtx
 
-	// fmt.Println("Data Logs Before Sampler: ", Data.logitbias, Data.gamma, Data.seed, Data.history)
-	// NewData.historySize = historySize
-	// if Data.changeWaterMarkStatus {
-
-	// }
 	if Data.resetSampler {
 		if Data.enableWatermark {
 			fmt.Println("Watermarking is enabled")
@@ -191,8 +154,6 @@ func StartGenerationwithParams(session *Session, Data PromptData) (bool, error) 
 
 func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 
-	// defer close(TokenChan)
-	// defer close(TokenIDChan)
 	defer close(prompt.ResultChan)
 
 	cPrompt := C.CString(prompt.prompt)
@@ -200,12 +161,6 @@ func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 
 	// var generatedTokens []TokenResult
 	generatedTokens := make([]TokenResult, 0)
-
-	// file, err := os.Create("output.txt")
-	// if err != nil {
-	// 	return "", false, fmt.Errorf("failed to create output file: %w", err)
-	// }
-	// defer file.Close()
 
 	response := ""
 
@@ -327,16 +282,6 @@ func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 			pending = pending[:0]
 		}
 
-
-		// Convert C buffer -> Go string
-		// piece := C.GoStringN(&buf[0], n)
-		// print(piece)
-		// fmt.Printf("PIECE: %q\n", piece)
-		// fmt.Printf("BYTES: % X\n", []byte(piece))
-		// prompt.piece = piece
-
-		// prompt.totalTokenCnt, prompt.totalGreenTokenCnt, prompt.CurrentZscore = BasicGreenStreamPercentage(prompt, startTime)
-
 		defaultTokenID := C.llama_token(10)
 
 		gotokenhistory = append(gotokenhistory, newTokenID)
@@ -359,22 +304,6 @@ func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 			tokenhistoryPtr = (*C.llama_token)(unsafe.Pointer(&gotokenhistory[0]))
 		}
 		prompt.tokenhistoryPtr = tokenhistoryPtr
-
-		// fmt.Println("gotokenhistory: ",gotokenhistory)
-
-		// fmt.Print(piece)
-		// TokenChan <- piece
-		// response += piece
-
-		// _, err = file.WriteString(piece)
-		// if err != nil {
-		// 	return "", fmt.Errorf("failed to write to output file: %w", err)
-		// }
-
-		// err = file.Sync()
-		// if err != nil {
-		// 	return "", fmt.Errorf("failed to flush output file: %w", err)
-		// }
 
 		// Prepare next batch with the sampled token
 		batch = C.llama_batch_get_one(&newTokenID, 1)
@@ -417,10 +346,6 @@ func RunConvo(session *Session, prompt PromptData, websocket bool) (bool, error)
 			prompt,
 			"user",
 		)
-
-		// if strings.TrimSpace(strings.ToLower(prompt.prompt)) == "end" {
-		// 	break
-		// }
 
 		// Get chat template
 		// fmt.Println(prompt.model)
