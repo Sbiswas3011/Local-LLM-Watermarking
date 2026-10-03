@@ -86,7 +86,7 @@ func BasicGreenStreamPercentage(prompt PromptData, startTime time.Time) (int, in
 
 	elapsedTime := time.Since(startTime).Seconds()
 	tokensPerSecond := 1 / elapsedTime
-	fmt.Println("elapsed, count and tokens/s: ", elapsedTime, 1, tokensPerSecond)
+	// fmt.Println("elapsed, count and tokens/s: ", elapsedTime, 1, tokensPerSecond)
 	result.TokensPerSecond = tokensPerSecond
 
 	select {

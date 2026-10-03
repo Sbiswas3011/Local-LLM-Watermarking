@@ -26,9 +26,10 @@ import "C"
 import (
 	"bufio"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 	"unicode/utf8"
-	"os"
 	"unsafe"
 )
 
@@ -71,18 +72,41 @@ func InitModel() (PromptData, error) {
 	fmt.Println("llama.cpp C API loaded")
 	fmt.Printf("llama.cpp version: %s\n", C.GoString(C.llama_version()))
 
+	Data := PromptData{}
+
 	ModelPath := os.Getenv("MODEL_PATH")
+	UseMmap := os.Getenv("USE_MMAP")
+	GPULayers := os.Getenv("GPU_LAYERS")
 
 	if ModelPath == "" {
 		ModelPath = "C:/Users/JAYANTA/Desktop/LLM_work/gguf_store/Swift-Qwen3.8-27B-Q4_K_M.gguf"
 	}
+	
+	fmt.Println("loading model params")
 
 	model_params := C.llama_model_default_params()
+
+	if GPULayers != "" {
+		num, err := strconv.Atoi(GPULayers)
+		if err != nil {
+			fmt.Println("Error during conversion:", err)
+			return Data, err
+		}
+		model_params.n_gpu_layers = C.int(num)
+	} else {
+		model_params.n_gpu_layers = C.int(53)
+	}
+
 	model_params.n_gpu_layers = C.int(53)
+
+	if UseMmap == "true" {
+		fmt.Println("Using mmap for model loading")
+		model_params.load_mode = C.LLAMA_LOAD_MODE_MMAP // non-mmap value
+	}
 
 	C.disable_llama_logs()
 
-	Data := PromptData{}
+	fmt.Println("loading model from path: ", ModelPath)
 
 	model := C.llama_model_load_from_file(C.CString(ModelPath), model_params)
 	if model == nil {
@@ -119,7 +143,7 @@ func InitModel() (PromptData, error) {
 	fmt.Println("Model Loaded Successfully")
 
 	Data = PromptData{
-		vocab: vocab,
+		vocab:   vocab,
 		model:   model,
 		n_vocab: int(n_vocab),
 	}
@@ -207,7 +231,11 @@ func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 	}
 	prompt.tokenhistoryPtr = tokenhistoryPtr
 
+	// fmt.Println("Before Batch Get One")
+
 	batch := C.llama_batch_get_one((*C.llama_token)(unsafe.Pointer(&promptTokens[0])), C.int32_t(len(promptTokens)))
+
+	// fmt.Println("After Batch Get One")
 
 	var newTokenID C.llama_token
 	// var nCtx C.uint32_t
@@ -225,7 +253,11 @@ func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 
 		startTime := time.Now()
 
+		// fmt.Println("Before llama_memory_seq_pos_max")
+
 		nCtxUsed = C.llama_memory_seq_pos_max(C.llama_get_memory(prompt.ctx), 0) + 1
+
+		// fmt.Println("After llama_memory_seq_pos_max")
 
 		// prompt.nctx = nCtx
 		prompt.nctxUsed = nCtxUsed
@@ -236,14 +268,23 @@ func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 			return "", false, generatedTokens, fmt.Errorf("context size exceeded")
 		}
 
+		// fmt.Println("Before llama_decode")
+
 		// Run the model
 		ret := C.llama_decode(prompt.ctx, batch)
 		if ret != 0 {
 			return "", false, generatedTokens, fmt.Errorf("failed to decode, ret = %d", ret)
 		}
 
+		// fmt.Println("After llama_decode")
+
+		// fmt.Println("Before llama_sampler_sample")
+
 		// Sample next token
 		newTokenID = C.llama_sampler_sample(prompt.smpl, prompt.ctx, -1)
+
+		// fmt.Println("After llama_sampler_sample")
+
 		prompt.newTokenID = newTokenID
 		// TokenIDChan <- newTokenID
 		C.llama_token_history_add(prompt.history, C.llama_token(newTokenID))
@@ -259,7 +300,11 @@ func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 		// Convert token -> text
 		var buf [256]C.char
 
+		// fmt.Println("Before llama_token_to_piece")
+
 		n := C.llama_token_to_piece(prompt.vocab, newTokenID, &buf[0], C.int32_t(len(buf)), 0, true)
+
+		// fmt.Println("After llama_token_to_piece")
 
 		if n < 0 {
 			return "", false, generatedTokens, fmt.Errorf("failed to convert token to piece")
