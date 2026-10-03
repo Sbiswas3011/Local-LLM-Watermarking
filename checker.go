@@ -1,8 +1,13 @@
 package main
 
 /*
-#cgo CFLAGS: -IC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/include -IC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/ggml/include
-#cgo windows,amd64 LDFLAGS: -LC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/build/src/Release -l:llama.lib
+
+#cgo linux CFLAGS: -I/app/llama.cpp/include -I/app/llama.cpp/ggml/include
+#cgo linux LDFLAGS: -L/app/llama.cpp/build/bin -l:libllama.so
+
+#cgo windows,amd64 CFLAGS: -IC:/Users/JAYANTA/Desktop/LLM_work/LlamaFork/llama.cpp/include -IC:/Users/JAYANTA/Desktop/LLM_work/LlamaFork/llama.cpp/ggml/include
+#cgo windows,amd64 LDFLAGS: -LC:/Users/JAYANTA/Desktop/LLM_work/LlamaFork/llama.cpp/build/src/Release -l:llama.lib
+
 #include "llama.h"
 #include <stdlib.h>
 static void silent_log_callback(

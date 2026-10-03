@@ -1,8 +1,12 @@
 package main
 
 /*
-#cgo CFLAGS: -IC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/include -IC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/ggml/include
-#cgo windows,amd64 LDFLAGS: -LC:/Users/JAYANTA/Desktop/LlamaFork/llama.cpp/build/src/Release -l:llama.lib
+#cgo linux CFLAGS: -I/app/llama.cpp/include -I/app/llama.cpp/ggml/include
+#cgo linux LDFLAGS: -L/app/llama.cpp/build/bin -l:libllama.so
+
+#cgo windows,amd64 CFLAGS: -IC:/Users/JAYANTA/Desktop/LLM_work/LlamaFork/llama.cpp/include -IC:/Users/JAYANTA/Desktop/LLM_work/LlamaFork/llama.cpp/ggml/include
+#cgo windows,amd64 LDFLAGS: -LC:/Users/JAYANTA/Desktop/LLM_work/LlamaFork/llama.cpp/build/src/Release -l:llama.lib
+
 #include "llama.h"
 #include <stdlib.h>
 static void silent_log_callback(
@@ -66,7 +70,12 @@ var Ctx_params C.struct_llama_context_params
 func InitModel() (PromptData, error) {
 	fmt.Println("llama.cpp C API loaded")
 	fmt.Printf("llama.cpp version: %s\n", C.GoString(C.llama_version()))
-	ModelPath = "C:/Users/JAYANTA/Desktop/gguf_store/Swift-Qwen3.8-27B-Q4_K_M.gguf"
+
+	ModelPath := os.Getenv("MODEL_PATH")
+
+	if ModelPath == "" {
+		ModelPath = "C:/Users/JAYANTA/Desktop/LLM_work/gguf_store/Swift-Qwen3.8-27B-Q4_K_M.gguf"
+	}
 
 	model_params := C.llama_model_default_params()
 	model_params.n_gpu_layers = C.int(53)
