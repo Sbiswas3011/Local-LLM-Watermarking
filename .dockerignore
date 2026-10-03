@@ -1,0 +1,28 @@
+# Git
+.git
+.gitmodules
+
+# llama.cpp build artifacts
+LlamaFork/llama.cpp/build/
+LlamaFork/llama.cpp/.cache/
+
+# Windows build artifacts
+**/*.exe
+**/*.dll
+**/*.obj
+**/*.lib
+**/*.pdb
+
+# Go
+Local_LLM_Watermarking/bin/
+Local_LLM_Watermarking/*.exe
+
+# Frontend
+Local_LLM_Watermarking/frontend/node_modules/
+Local_LLM_Watermarking/frontend/dist/
+
+# OS/editor
+**/.DS_Store
+**/Thumbs.db
+.vscode/
+.idea/
