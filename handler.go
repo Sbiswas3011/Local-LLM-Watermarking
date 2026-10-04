@@ -42,14 +42,16 @@ var upgrader = websocket.Upgrader{
 }
 
 type wSMessage struct {
-	Type         string  `json:"type"`
-	Text         string  `json:"text"`
-	Watermark    bool    `json:"watermark"`
-	HistorySize  int     `json:"history_size"`
-	Seed         string  `json:"seed"`
-	Gamma        float64 `json:"gamma"`
-	LogitBias    float64 `json:"logit_bias"`
-	ResetSampler bool    `json:"reset_sampler"`
+	Type          string  `json:"type"`
+	Text          string  `json:"text"`
+	Watermark     bool    `json:"watermark"`
+	HistorySize   int     `json:"history_size"`
+	Seed          string  `json:"seed"`
+	Gamma         float64 `json:"gamma"`
+	LogitBias     float64 `json:"logit_bias"`
+	ResetSampler  bool    `json:"reset_sampler"`
+	WatermarkType string  `json:"watermark_type"`
+	Keys          []int64 `json:"keys"`
 }
 
 type ProcessRequest struct {
@@ -74,22 +76,26 @@ type Session struct {
 	CloseResultChan  chan bool
 	TokenSpent       int
 	TokenTotal       int
+	TokensPerSec     float64
+	WeightedMean     float64
 	Zscore           float64
 	InternalMessages []InternalMessage
 }
 
 type InternalMessage struct {
-	Typ             string
-	Role            string
-	Data            []string
-	Greensplit      []bool
-	Thinkdata       []string
-	Thinkgreensplit []bool
-	Watermarked     bool
-	Logitbias       float64
-	Gamma           float64
-	Seed            string
-	HistorySize     int
+	Typ               string
+	Role              string
+	Data              []string
+	Greensplit        []bool
+	Thinkdata         []string
+	Thinkgreensplit   []bool
+	ThinkWeightedMean []float64
+	DataWeightedMean  []float64
+	Watermarked       bool
+	Logitbias         float64
+	Gamma             float64
+	Seed              string
+	HistorySize       int
 }
 
 func main() {
@@ -143,6 +149,14 @@ func (s *Server) getOrCreateSession(id string) (*Session, bool, error) {
 			model:   s.Data.model,
 			vocab:   s.Data.vocab,
 			n_vocab: s.Data.n_vocab,
+			keys: []int64{1,2,3,4},
+			seed: "i_am_a_llm",
+			historySize: 4,
+			logitbias: 2,
+			gamma: 0.6,
+			watermarkType: "RedGreen",
+			enableWatermark: false,
+
 		},
 		// ResultChan: make(chan TokenResult, 32),
 		// CloseResultChan: make(chan bool, 1),
@@ -310,10 +324,13 @@ func (s *Server) websocketHandler(c *gin.Context) {
 				session.Smpl = smpl
 				session.Data.resetSampler = true
 				session.Data.enableWatermark = message.Watermark
+				session.Data.watermarkType = message.WatermarkType
 				session.Data.seed = message.Seed
 				session.Data.gamma = message.Gamma
 				session.Data.logitbias = message.LogitBias
 				session.Data.historySize = message.HistorySize
+				session.Data.keys = message.Keys
+				session.Data.weightedMean = 0.0
 			} else {
 				session.Data.resetSampler = false
 			}
@@ -380,11 +397,15 @@ func (s *Server) getSession(c *gin.Context) {
 		"z_score":                session.Zscore,
 		"tokens_spent":           session.TokenSpent,
 		"total_available_tokens": session.TokenTotal,
+		"tokens_per_sec":         session.TokensPerSec,
+		"weighted_mean":          session.WeightedMean,
+		"keys":                   session.Data.keys,
 		"watermark":              session.Data.enableWatermark,
 		"logit_bias":             session.Data.logitbias,
 		"history_size":           session.Data.historySize,
 		"gamma":                  session.Data.gamma,
 		"seed":                   session.Data.seed,
+		"watermark_type": 		  session.Data.watermarkType,
 		"messages":               session.InternalMessages,
 	})
 }

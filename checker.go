@@ -42,42 +42,60 @@ type TokenResult struct {
 	IsGreen         bool
 	TokensPerSecond float64
 	Watermarked     bool
+	WeightedMean    float64
 }
 
 func BasicGreenStreamPercentage(prompt PromptData, startTime time.Time) (int, int, float64, TokenResult, bool) {
 
 	result := TokenResult{}
 	prompt.totalTokenCnt++
+	// Keys := []int64{1, 2, 3, 4, 5}
+	// weightedMean := 0.0
 
 	if !prompt.enableWatermark {
 		result.Token = prompt.piece
 		result.ContextUsed = int(prompt.nctxUsed)
 		result.TotalContext = int(prompt.nctx)
 		result.Watermarked = prompt.enableWatermark
-	}else{
-		isGreen := false
+	} else {
 		seedC := C.CString(prompt.seed)
 		defer C.free(unsafe.Pointer(seedC))
 
-		isGreen = bool(C.llama_sampler_check_basic_watermarkv2(prompt.newTokenID, C.float(prompt.gamma), seedC, prompt.tokenhistoryPtr, C.size_t(prompt.historySize), C.int32_t(prompt.n_vocab)))
+		switch prompt.watermarkType {
+		case "RedGreen":
+			isGreen := false
+			isGreen = bool(C.llama_sampler_check_basic_watermarkv2(prompt.newTokenID, C.float(prompt.gamma), seedC, prompt.tokenhistoryPtr, C.size_t(prompt.historySize), C.int32_t(prompt.n_vocab)))
+			if isGreen {
+				prompt.totalGreenTokenCnt++
+				result.IsGreen = true
+			} else {
+				result.IsGreen = false
+			}
 
-		if isGreen {
-			prompt.totalGreenTokenCnt++
-			result.IsGreen = true
-		} else {
-			result.IsGreen = false
-		}
+			expected := float64(prompt.totalTokenCnt) * prompt.gamma
+			variance := float64(prompt.totalTokenCnt) * prompt.gamma * (1.0 - prompt.gamma)
+			if variance > 0 {
+				prompt.CurrentZscore = (float64(prompt.totalGreenTokenCnt) - expected) / math.Sqrt(variance)
+			} else {
+				prompt.CurrentZscore = 0
+			}
 
-		expected := float64(prompt.totalTokenCnt) * prompt.gamma
-		variance := float64(prompt.totalTokenCnt) * prompt.gamma * (1.0 - prompt.gamma)
-		if variance > 0 {
-			prompt.CurrentZscore = (float64(prompt.totalGreenTokenCnt) - expected) / math.Sqrt(variance)
-		} else {
+		case "SynthID":
 			prompt.CurrentZscore = 0
+			// fmt.Println("Weighted Mean Before: ",prompt.weightedMean)
+			prompt.weightedMean = float64(C.llama_sampler_check_synthId_watermark(prompt.newTokenID, (*C.int64_t)(unsafe.Pointer(&prompt.keys[0])), C.size_t(len(prompt.keys)), seedC, prompt.tokenhistoryPtr, C.size_t(prompt.historySize), C.double(prompt.weightedMean), C.uint32_t(prompt.totalTokenCnt-1)))
+			result.WeightedMean = prompt.weightedMean
+			// fmt.Println("Weighted Mean After: ",prompt.weightedMean)
+			if prompt.weightedMean > 0.5{
+				prompt.totalGreenTokenCnt++
+				result.IsGreen = true
+			}else {
+				result.IsGreen = false
+			}
 		}
 
 		result.Token = prompt.piece
-		result.GreenPercentage = float64(prompt.totalGreenTokenCnt * 100 / prompt.totalTokenCnt)
+		// result.GreenPercentage = float64(prompt.totalGreenTokenCnt * 100 / prompt.totalTokenCnt)
 		result.ZScore = prompt.CurrentZscore
 		result.ContextUsed = int(prompt.nctxUsed)
 		result.TotalContext = int(prompt.nctx)

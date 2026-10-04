@@ -59,6 +59,9 @@ type PromptData struct {
 	nctx               C.uint32_t
 	nctxUsed           C.llama_pos
 	resetSampler       bool
+	watermarkType      string
+	keys               []int64
+	weightedMean       float64
 }
 
 // var Data = PromptData{}
@@ -81,7 +84,7 @@ func InitModel() (PromptData, error) {
 	if ModelPath == "" {
 		ModelPath = "C:/Users/JAYANTA/Desktop/LLM_work/gguf_store/Swift-Qwen3.8-27B-Q4_K_M.gguf"
 	}
-	
+
 	fmt.Println("loading model params")
 
 	model_params := C.llama_model_default_params()
@@ -96,8 +99,6 @@ func InitModel() (PromptData, error) {
 	} else {
 		model_params.n_gpu_layers = C.int(53)
 	}
-
-	model_params.n_gpu_layers = C.int(53)
 
 	if UseMmap == "true" {
 		fmt.Println("Using mmap for model loading")
@@ -153,23 +154,44 @@ func InitModel() (PromptData, error) {
 	return Data, nil
 }
 
+func historyTokens(history unsafe.Pointer) []int32 {
+	n := int(C.llama_token_history_size(history))
+	if n == 0 {
+		return nil
+	}
+	buf := make([]C.llama_token, n)
+	got := int(C.llama_token_history_get(history, &buf[0], C.size_t(n)))
+
+	out := make([]int32, got)
+	for i := 0; i < got; i++ {
+		out[i] = int32(buf[i])
+	}
+	return out
+}
+
 func StartGenerationwithParams(session *Session, Data PromptData) (bool, error) {
 
 	seedC := C.CString(Data.seed)
 	defer C.free(unsafe.Pointer(seedC))
 	history := C.llama_token_history_create()
 	Data.history = history
-
+	// Keys := []int64{1, 2, 3, 4, 5}
 	nCtx := C.llama_n_ctx(Data.ctx)
 	Data.nctx = nCtx
 
 	if Data.resetSampler {
 		if Data.enableWatermark {
 			fmt.Println("Watermarking is enabled")
-			fmt.Println("Data Logs Before Sampler: ", Data.logitbias, Data.gamma, Data.seed, Data.history)
-			C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_green_red(C.float(Data.logitbias), C.float(Data.gamma), seedC, history))
-			C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_top_k(40))
-			C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_dist(0))
+			// fmt.Println("Data Logs Before Sampler: ", Data.logitbias, Data.gamma, Data.seed, Data.history)
+			switch Data.watermarkType {
+			case "RedGreen":
+				C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_green_red(C.float(Data.logitbias), C.float(Data.gamma), seedC, history))
+				C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_top_k(40))
+				C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_dist(C.LLAMA_DEFAULT_SEED))
+			case "SynthID":
+				C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_top_k(40))
+				C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_synthId((*C.int64_t)(unsafe.Pointer(&Data.keys[0])), C.size_t(len(Data.keys)), seedC, C.LLAMA_DEFAULT_SEED, history))
+			}
 		} else {
 			fmt.Println("Watermarking is disabled")
 			C.llama_sampler_chain_add(Data.smpl, C.llama_sampler_init_top_k(40))
@@ -253,11 +275,7 @@ func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 
 		startTime := time.Now()
 
-		// fmt.Println("Before llama_memory_seq_pos_max")
-
 		nCtxUsed = C.llama_memory_seq_pos_max(C.llama_get_memory(prompt.ctx), 0) + 1
-
-		// fmt.Println("After llama_memory_seq_pos_max")
 
 		// prompt.nctx = nCtx
 		prompt.nctxUsed = nCtxUsed
@@ -268,22 +286,16 @@ func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 			return "", false, generatedTokens, fmt.Errorf("context size exceeded")
 		}
 
-		// fmt.Println("Before llama_decode")
-
 		// Run the model
 		ret := C.llama_decode(prompt.ctx, batch)
 		if ret != 0 {
 			return "", false, generatedTokens, fmt.Errorf("failed to decode, ret = %d", ret)
 		}
 
-		// fmt.Println("After llama_decode")
-
-		// fmt.Println("Before llama_sampler_sample")
+		// fmt.Println("Printing Tokens Before Sampler: ", historyTokens(prompt.history))
 
 		// Sample next token
 		newTokenID = C.llama_sampler_sample(prompt.smpl, prompt.ctx, -1)
-
-		// fmt.Println("After llama_sampler_sample")
 
 		prompt.newTokenID = newTokenID
 		// TokenIDChan <- newTokenID
@@ -300,11 +312,7 @@ func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 		// Convert token -> text
 		var buf [256]C.char
 
-		// fmt.Println("Before llama_token_to_piece")
-
 		n := C.llama_token_to_piece(prompt.vocab, newTokenID, &buf[0], C.int32_t(len(buf)), 0, true)
-
-		// fmt.Println("After llama_token_to_piece")
 
 		if n < 0 {
 			return "", false, generatedTokens, fmt.Errorf("failed to convert token to piece")
@@ -320,6 +328,8 @@ func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 			response += piece
 			result := TokenResult{}
 
+			// fmt.Println("Printing Tokens Before Checker: ", gotokenhistory)
+
 			prompt.totalTokenCnt, prompt.totalGreenTokenCnt, prompt.CurrentZscore, result, immediateStop = BasicGreenStreamPercentage(prompt, startTime)
 
 			if immediateStop {
@@ -328,6 +338,8 @@ func Generate(prompt PromptData) (string, bool, []TokenResult, error) {
 				// C.llama_memory_seq_rm(C.llama_get_memory(prompt.ctx), 0, prompt.nctxUsed-1, prompt.nctxUsed)
 				return response, true, generatedTokens, nil
 			}
+
+			prompt.weightedMean = result.WeightedMean
 
 			generatedTokens = append(generatedTokens, result)
 
@@ -379,6 +391,8 @@ func RunConvo(session *Session, prompt PromptData, websocket bool) (bool, error)
 	genrationOverGlobal := false
 	zscore := 0.0
 	ctxUsed := 0
+	tokensPerSec := 0.0
+	weightedMean := 0.0
 
 	for {
 
@@ -394,7 +408,7 @@ func RunConvo(session *Session, prompt PromptData, websocket bool) (bool, error)
 			// fmt.Println("Registered Prompt: ", strings.TrimSpace(strings.ToLower(user)))
 		}
 
-		internalmessages, _, _ = convertToInternalMessages(
+		internalmessages, _, _, _, _ = convertToInternalMessages(
 			internalmessages,
 			nil,
 			prompt,
@@ -446,7 +460,7 @@ func RunConvo(session *Session, prompt PromptData, websocket bool) (bool, error)
 
 		genrationOverGlobal = generationOver
 
-		internalmessages, zscore, ctxUsed = convertToInternalMessages(
+		internalmessages, zscore, ctxUsed, tokensPerSec, weightedMean = convertToInternalMessages(
 			internalmessages,
 			generatedTokens,
 			prompt,
@@ -480,6 +494,8 @@ func RunConvo(session *Session, prompt PromptData, websocket bool) (bool, error)
 	session.TokenTotal = int(prompt.nctx)
 	session.Zscore = zscore
 	session.TokenSpent = ctxUsed
+	session.TokensPerSec = tokensPerSec
+	session.WeightedMean = weightedMean
 	session.InternalMessages = append(session.InternalMessages, internalmessages...)
 
 	return genrationOverGlobal, nil
@@ -490,15 +506,17 @@ func convertToInternalMessages(
 	messages []TokenResult,
 	prompt PromptData,
 	role string,
-) ([]InternalMessage, float64, int) {
+) ([]InternalMessage, float64, int, float64, float64) {
 
 	msg := InternalMessage{
-		Typ:             "message",
-		Role:            role,
-		Data:            make([]string, 0),
-		Greensplit:      make([]bool, 0),
-		Thinkdata:       make([]string, 0),
-		Thinkgreensplit: make([]bool, 0),
+		Typ:               "message",
+		Role:              role,
+		Data:              make([]string, 0),
+		Greensplit:        make([]bool, 0),
+		Thinkdata:         make([]string, 0),
+		Thinkgreensplit:   make([]bool, 0),
+		ThinkWeightedMean: make([]float64, 0),
+		DataWeightedMean:  make([]float64, 0),
 
 		Watermarked: prompt.enableWatermark,
 		Logitbias:   prompt.logitbias,
@@ -510,7 +528,7 @@ func convertToInternalMessages(
 	// User message
 	if role == "user" {
 		msg.Data = append(msg.Data, prompt.prompt)
-		return append(history, msg), 0.0, 0
+		return append(history, msg), 0.0, 0, 0.0, 0.0
 	}
 
 	// Assistant message
@@ -537,14 +555,16 @@ func convertToInternalMessages(
 				msg.Thinkgreensplit,
 				token.IsGreen,
 			)
+			msg.ThinkWeightedMean = append(msg.ThinkWeightedMean, token.WeightedMean)
 		} else {
 			msg.Data = append(msg.Data, text)
 			msg.Greensplit = append(
 				msg.Greensplit,
 				token.IsGreen,
 			)
+			msg.DataWeightedMean = append(msg.DataWeightedMean, token.WeightedMean)
 		}
 	}
 
-	return append(history, msg), messages[len(messages)-1].ZScore, messages[len(messages)-1].ContextUsed
+	return append(history, msg), messages[len(messages)-1].ZScore, messages[len(messages)-1].ContextUsed, messages[len(messages)-1].TokensPerSecond, messages[len(messages)-1].WeightedMean
 }

@@ -45,22 +45,41 @@ function TextBox() {
     contextUsed: 0,
     totalContext: 0,
     tokensPerSecond: 0,
+    weightedMean: 0.0,
   });
-
   const [settings, setSettings] = useState({
     watermark: false,
-    logit_bias: 4.0,
+    watermark_type: "RedGreen",
+    logit_bias: 2,
     gamma: 0.6,
     history_size: 4,
     seed: "i_am_a_llm",
+    keys: "1,2,3,4",
   });
+  const [settingsUpdated, setSettingsUpdated] = useState(false);
 
-  // const API_HOST = `${window.location.hostname}:8080`;
+  const showSettingsPopup = (message) => {
+    setSettingsUpdated(message);
+
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+
+    timeoutRef.current = setTimeout(() => {
+      setSettingsUpdated(false);
+      timeoutRef.current = null;
+    }, 1000);
+  };
+
+  // const API_HOST = `http://${window.location.hostname}:8080`;
+  // const API_HOST = "http://localhost:8080";
+  const API_HOST = "";
 
   useEffect(() => {
     const sessionID = getSessionID();
 
-    fetch(`/api/getsession?session_id=${sessionID}`)
+    fetch(`${API_HOST}/api/getsession?session_id=${sessionID}`)
+    // fetch(`${API_HOST}/getsession?session_id=${sessionID}`)
       .then((response) => {
         if (!response.ok) {
           throw new Error("Failed to get session");
@@ -72,15 +91,18 @@ function TextBox() {
           zScore: data.z_score,
           contextUsed: data.tokens_spent,
           totalContext: data.total_available_tokens,
-          tokensPerSecond: 0,
+          tokensPerSecond: data.tokens_per_sec,
+          weightedMean: data.weighted_mean,
         });
 
         setSettings({
           watermark: data.watermark,
+          watermark_type: data.watermark_type,
           logit_bias: data.logit_bias,
           gamma: data.gamma,
           history_size: data.history_size,
           seed: data.seed,
+          keys: Array.isArray(data.keys) ? data.keys.join(",") : "",
         });
 
         const renderedMessages = data.messages.map((message) => {
@@ -159,6 +181,10 @@ function TextBox() {
     const sessionID = getSessionID();
 
     const wsUrl = `${protocol}//${window.location.host}/api/ws?session_id=${sessionID}`;
+    // const wsUrl = `${protocol}//localhost:8080/ws?session_id=${sessionID}`;
+    // const wsUrl = `${protocol}//${window.location.hostname}:8080/ws?session_id=${sessionID}`;
+
+    // ${window.location.hostname}
 
     console.log("Connecting to:", wsUrl);
 
@@ -170,10 +196,15 @@ function TextBox() {
           type: "chat",
           text: prompt,
           watermark: settings.watermark,
+          watermark_type: settings.watermark_type,
           logit_bias: settings.logit_bias,
           gamma: settings.gamma,
           history_size: settings.history_size,
           seed: settings.seed,
+          keys: settings.keys
+            .split(",")
+            .filter((key) => key.trim() !== "")
+            .map(Number),
           reset_sampler: true,
         }),
       );
@@ -212,6 +243,7 @@ function TextBox() {
         contextUsed: result.ContextUsed,
         totalContext: result.TotalContext,
         tokensPerSecond: result.TokensPerSecond,
+        weightedMean: result.WeightedMean,
       });
 
       setMessages((previous) => {
@@ -279,11 +311,58 @@ function TextBox() {
     const sessionID = getSessionID();
 
     try {
-      await fetch(`/api/closechan?session_id=${sessionID}`);
+      await fetch(`${API_HOST}/api/closechan?session_id=${sessionID}`);
+      // await fetch(`${API_HOST}/closechan?session_id=${sessionID}`);
     } catch (error) {
       console.error("Failed to stop generation:", error);
     }
   };
+
+  const closeSettings = () => {
+    let logitBias = Number(settings.logit_bias);
+    let gamma = Number(settings.gamma);
+    let historySize = Number(settings.history_size);
+    let valueReset = false;
+
+    if (!Number.isFinite(logitBias)) {
+      logitBias = 0;
+      valueReset = true;
+    }
+
+    if (!Number.isFinite(gamma) || gamma < 0 || gamma > 1) {
+      gamma = 0;
+      valueReset = true;
+    }
+
+    if (!Number.isInteger(historySize) || historySize < 0) {
+      historySize = 0;
+      valueReset = true;
+    }
+
+    const parts = settings.keys.split(",").map((key) => key.trim());
+
+    const keys = parts.filter((key) => key !== "").map(Number);
+
+    if (keys.some((key) => !Number.isInteger(key))) {
+      valueReset = true;
+    }
+
+    const validKeys = keys.filter(Number.isInteger);
+
+    setSettings({
+      ...settings,
+      logit_bias: logitBias,
+      gamma: gamma,
+      history_size: historySize,
+      keys: validKeys.join(","),
+    });
+
+    setPage("chat");
+
+    showSettingsPopup(valueReset ? "Invalid Values Reset" : "Settings Updated");
+  };
+
+  const timeoutRef = useRef(null);
 
   return (
     <div className="app">
@@ -305,6 +384,7 @@ function TextBox() {
           </div>
           <div>Z-Score: {Number(stats.zScore).toFixed(2)}</div>
           <div>Tokens/s: {Number(stats.tokensPerSecond).toFixed(2)}</div>
+          <div>W-Mean: {Number(stats.weightedMean).toFixed(2)}</div>
         </div>
 
         <div className="messages">
@@ -391,7 +471,12 @@ function TextBox() {
           <button
             className="settings-button"
             type="button"
-            onClick={() => setPage(page === "settings" ? "chat" : "settings")}
+            onClick={() => {
+              if (page === "settings") {
+                closeSettings();
+              }
+              setPage(page === "settings" ? "chat" : "settings");
+            }}
           >
             <span className="setting-gear">⚙️</span>
           </button>
@@ -420,7 +505,15 @@ function TextBox() {
             // disabled={isGenerating || !text.trim()}
             aria-label={isGenerating ? "Stop generation" : "Send message"}
           >
-            <span className="send-arrow">{isGenerating ? "■" : "🡅"}</span>
+            {/* <span className="send-arrow">{isGenerating ? "■" : "🡅"}</span> */}
+            {isGenerating ? (
+              <span className="stop-box"></span>
+            ) : (
+              <>
+                <span className="send-arrow-desktop">🡅</span>
+                <span className="send-arrow-mobile">↑</span>
+              </>
+            )}
           </button>
         </form>
       </main>
@@ -431,7 +524,12 @@ function TextBox() {
           setSettings={setSettings}
           setPage={setPage}
           sessionID={getSessionID()}
+          closeSettings={closeSettings}
         />
+      )}
+
+      {settingsUpdated && (
+        <div className="settings-updated">{settingsUpdated}</div>
       )}
     </div>
   );
