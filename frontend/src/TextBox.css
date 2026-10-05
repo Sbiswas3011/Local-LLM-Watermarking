@@ -283,8 +283,29 @@ body {
 
 .settings-panel {
   position: absolute;
-  top: 60px;
-  right: 20px;
+  top: 6px;
+  right: 2opx;
+}
+
+.server-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: #888;
+  margin-left: -130px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
+.server-status.up .status-dot {
+  background: #22c55e;
+  box-shadow: 0 0 8px #22c55e;
 }
 
 @media (max-width: 700px) {
@@ -313,6 +334,7 @@ body {
     align-self: flex-start;
     font-size: 12px;
     padding: 6px 8px;
+    margin-left: -5px;
   }
 
   .generation-stats {
@@ -386,4 +408,16 @@ body {
     width: 20px;
     height: 20px;
   }
+
+  .server-status {
+    display: flex;
+    margin-left: 0;
+    font-size: 12px;
+  }
+
+  .status-dot {
+    width: 7px;
+    height: 7px;
+  }
+
 }

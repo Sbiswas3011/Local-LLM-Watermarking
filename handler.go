@@ -114,6 +114,7 @@ func main() {
 	router.Use(cors.Default())
 
 	router.GET("/", func(c *gin.Context) { c.File("./index.html") })
+	router.GET("/ping",server.ping)
 	router.GET("/ws", server.websocketHandler)
 	router.GET("/getsession", server.getSession)
 	router.POST("/process", server.processTextHandler)
@@ -121,6 +122,12 @@ func main() {
 	router.GET("/resetmsgs", server.resetMessages)
 	router.GET("/closechan", server.closeResultChan)
 	router.Run(":8080")
+}
+
+func (s *Server) ping(c *gin.Context){
+	c.JSON(http.StatusOK, gin.H{
+        "status": "ok",
+    })
 }
 
 func (s *Server) getOrCreateSession(id string) (*Session, bool, error) {

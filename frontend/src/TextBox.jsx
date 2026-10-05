@@ -70,20 +70,59 @@ function TextBox() {
       timeoutRef.current = null;
     }, 1000);
   };
+  const [backendAlive, setBackendAlive] = useState(false);
 
   // const API_HOST = `http://${window.location.hostname}:8080`;
   // const API_HOST = "http://localhost:8080";
   const API_HOST = "";
 
   useEffect(() => {
+    let stopped = false;
+
+    const checkBackend = async () => {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 2000);
+
+        const response = await fetch(`${API_HOST}/ping`, {
+          method: "GET",
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        if (!stopped) {
+          setBackendAlive(response.ok);
+        }
+      } catch {
+        if (!stopped) {
+          setBackendAlive(false);
+        }
+      }
+    };
+
+    // Check immediately
+    checkBackend();
+
+    // Then every 5 seconds
+    const interval = setInterval(checkBackend, 2000);
+
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
     const sessionID = getSessionID();
 
     fetch(`${API_HOST}/api/getsession?session_id=${sessionID}`)
-    // fetch(`${API_HOST}/getsession?session_id=${sessionID}`)
+      // fetch(`${API_HOST}/getsession?session_id=${sessionID}`)
       .then((response) => {
         if (!response.ok) {
           throw new Error("Failed to get session");
         }
+        // setServerUp(true);
         return response.json();
       })
       .then((data) => {
@@ -151,6 +190,7 @@ function TextBox() {
         setMessages(renderedMessages);
       })
       .catch((error) => {
+        // setServerUp(false);
         console.error("Failed to load session:", error);
       });
   }, []);
@@ -378,6 +418,11 @@ function TextBox() {
           Generating Think Tokens
         </div>
 
+        <div className={`server-status ${backendAlive ? "up" : "down"}`}>
+          <span className="status-dot"></span>
+          {backendAlive ? "Server online" : "Server offline"}
+        </div>
+
         <div className="generation-stats">
           <div>
             Context: {stats.contextUsed} / {stats.totalContext}
@@ -405,7 +450,6 @@ function TextBox() {
                     {message.content.map((item, index) => (
                       <span
                         key={index}
-                        // style={{ color: item.isGreen ? "green" : "red" }}
                         style={
                           (message.watermarked ?? item.watermarked)
                             ? { color: item.isGreen ? "green" : "red" }
@@ -525,6 +569,8 @@ function TextBox() {
           setPage={setPage}
           sessionID={getSessionID()}
           closeSettings={closeSettings}
+          serverStatus={backendAlive}
+          isGenerating={isGenerating}
         />
       )}
 

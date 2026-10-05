@@ -6,6 +6,8 @@ function Settings({
   setPage,
   sessionID,
   closeSettings,
+  serverStatus,
+  isGenerating,
 }) {
   // const API_HOST = `http://${window.location.hostname}:8080`;
   // const API_HOST = "http://localhost:8080";
@@ -33,6 +35,9 @@ function Settings({
   const watermarkEnabled = settings.watermark;
   const isRedGreen = settings.watermark_type === "RedGreen";
   const isSynthID = settings.watermark_type === "SynthID";
+
+  console.log("serverStatus:", serverStatus);
+  console.log("type:", typeof serverStatus);
 
   return (
     <div className="settings-overlay">
@@ -162,12 +167,11 @@ function Settings({
             }
           />
         </label>
-
-        <button type="button" onClick={resetContext}>
+        <button type="button" disabled={!serverStatus || !isGenerating} onClick={resetContext}>
           Reset Context
         </button>
 
-        <button type="button" onClick={resetMessages}>
+        <button type="button" disabled={!serverStatus || !isGenerating} onClick={resetMessages}>
           Clear Screen
         </button>
       </div>
