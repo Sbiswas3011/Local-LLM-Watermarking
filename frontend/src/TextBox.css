@@ -288,12 +288,15 @@ body {
 }
 
 .server-status {
+  position: absolute;
+  top: 12px;
+  left: 17px;
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 14px;
   color: #888;
-  margin-left: -130px;
+  margin-left: -1px;
 }
 
 .status-dot {
@@ -410,8 +413,12 @@ body {
   }
 
   .server-status {
+    position: static; /* delete top: 57px and left: 200px */
+    align-self: flex-end; /* right side of the same row */
+    height: 32px;
+    margin: -41px 100px 0 0; /* -(32px height + 8px chat gap) pulls it up onto the indicator's row */
     display: flex;
-    margin-left: 0;
+    align-items: center;
     font-size: 12px;
   }
 
@@ -419,5 +426,4 @@ body {
     width: 7px;
     height: 7px;
   }
-
 }

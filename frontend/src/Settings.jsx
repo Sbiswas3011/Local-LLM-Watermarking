@@ -167,11 +167,11 @@ function Settings({
             }
           />
         </label>
-        <button type="button" disabled={!serverStatus || !isGenerating} onClick={resetContext}>
+        <button type="button" disabled={!serverStatus || isGenerating} onClick={resetContext}>
           Reset Context
         </button>
 
-        <button type="button" disabled={!serverStatus || !isGenerating} onClick={resetMessages}>
+        <button type="button" disabled={!serverStatus || isGenerating} onClick={resetMessages}>
           Clear Screen
         </button>
       </div>

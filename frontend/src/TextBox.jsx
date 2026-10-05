@@ -84,7 +84,7 @@ function TextBox() {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 2000);
 
-        const response = await fetch(`${API_HOST}/ping`, {
+        const response = await fetch(`${API_HOST}/api/ping`, {
           method: "GET",
           signal: controller.signal,
         });
@@ -546,10 +546,9 @@ function TextBox() {
           <button
             className="send-button"
             type="submit"
-            // disabled={isGenerating || !text.trim()}
+            disabled={!backendAlive}
             aria-label={isGenerating ? "Stop generation" : "Send message"}
           >
-            {/* <span className="send-arrow">{isGenerating ? "■" : "🡅"}</span> */}
             {isGenerating ? (
               <span className="stop-box"></span>
             ) : (
