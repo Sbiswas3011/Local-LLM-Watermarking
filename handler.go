@@ -29,6 +29,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -62,8 +63,10 @@ type ProcessRequest struct {
 }
 
 type Server struct {
-	Data     PromptData
-	Sessions map[string]*Session
+	Data         PromptData
+	Sessions     map[string]*Session
+	SessionLimit chan struct{}
+	mu           sync.Mutex
 }
 
 type Session struct {
@@ -106,15 +109,17 @@ func main() {
 	}
 
 	server := &Server{
-		Data:     Data,
-		Sessions: make(map[string]*Session),
+		Data:         Data,
+		Sessions:     make(map[string]*Session),
+		SessionLimit: make(chan struct{}, 2),
+		mu:           sync.Mutex{},
 	}
 
 	router := gin.Default()
 	router.Use(cors.Default())
 
 	router.GET("/", func(c *gin.Context) { c.File("./index.html") })
-	router.GET("/ping",server.ping)
+	router.GET("/ping", server.ping)
 	router.GET("/ws", server.websocketHandler)
 	router.GET("/getsession", server.getSession)
 	router.POST("/process", server.processTextHandler)
@@ -124,27 +129,39 @@ func main() {
 	router.Run(":8080")
 }
 
-func (s *Server) ping(c *gin.Context){
+func (s *Server) ping(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-        "status": "ok",
-    })
+		"status": "ok",
+	})
 }
 
 func (s *Server) getOrCreateSession(id string) (*Session, bool, error) {
+
+	s.mu.Lock()
+    defer s.mu.Unlock()
 
 	session, exists := s.Sessions[id]
 	if exists {
 		return session, true, nil
 	}
 
+	select {
+    case s.SessionLimit <- struct{}{}:
+        // Slot acquired
+    default:
+        return nil, false, fmt.Errorf("Server is at maximum session capacity")
+    }
+
 	ctx := C.llama_init_from_model(Model, Ctx_params)
 	if ctx == nil {
-		return nil, false, fmt.Errorf("Faild to create context")
+		<-s.SessionLimit
+		return nil, false, fmt.Errorf("Failed to create context")
 	}
 
 	smpl := C.llama_sampler_chain_init(C.llama_sampler_chain_default_params())
 	if smpl == nil {
-		return nil, false, fmt.Errorf("Faild to create sampler")
+		<-s.SessionLimit
+		return nil, false, fmt.Errorf("Failed to create sampler")
 	}
 
 	// Create context + sampler here
@@ -153,17 +170,16 @@ func (s *Server) getOrCreateSession(id string) (*Session, bool, error) {
 		Ctx:  ctx,
 		Smpl: smpl,
 		Data: PromptData{
-			model:   s.Data.model,
-			vocab:   s.Data.vocab,
-			n_vocab: s.Data.n_vocab,
-			keys: []int64{1,2,3,4},
-			seed: "i_am_a_llm",
-			historySize: 4,
-			logitbias: 2,
-			gamma: 0.6,
-			watermarkType: "RedGreen",
+			model:           s.Data.model,
+			vocab:           s.Data.vocab,
+			n_vocab:         s.Data.n_vocab,
+			keys:            []int64{1, 2, 3, 4},
+			seed:            "i_am_a_llm",
+			historySize:     4,
+			logitbias:       2,
+			gamma:           0.6,
+			watermarkType:   "RedGreen",
 			enableWatermark: false,
-
 		},
 		// ResultChan: make(chan TokenResult, 32),
 		// CloseResultChan: make(chan bool, 1),
@@ -180,7 +196,7 @@ func (s *Server) resetContext(c *gin.Context) {
 	session, lookupExists, err := s.getOrCreateSession(sessionID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Failed to Create Session",
+			"error": "Failed to Create Session or at Max",
 		})
 		return
 	}
@@ -218,7 +234,7 @@ func (s *Server) resetMessages(c *gin.Context) {
 	session, lookupExists, err := s.getOrCreateSession(sessionID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Failed to Get/Create Session",
+			"error": "Failed to Get/Create Session or at Max",
 		})
 		return
 	}
@@ -251,7 +267,7 @@ func (s *Server) closeResultChan(c *gin.Context) {
 	session, _, err := s.getOrCreateSession(sessionID)
 	if err != nil || session == nil {
 		c.JSON(http.StatusNotFound, gin.H{
-			"error": "Session not found",
+			"error": "Session not found  or at Max",
 		})
 		return
 	}
@@ -287,7 +303,7 @@ func (s *Server) websocketHandler(c *gin.Context) {
 	fmt.Println("sessionID", sessionID)
 	session, _, err := s.getOrCreateSession(sessionID)
 	if err != nil || session == nil {
-		println("Failed to Create Session")
+		println("Failed to Create Session or at Max")
 		return
 	}
 
@@ -412,7 +428,7 @@ func (s *Server) getSession(c *gin.Context) {
 		"history_size":           session.Data.historySize,
 		"gamma":                  session.Data.gamma,
 		"seed":                   session.Data.seed,
-		"watermark_type": 		  session.Data.watermarkType,
+		"watermark_type":         session.Data.watermarkType,
 		"messages":               session.InternalMessages,
 	})
 }
